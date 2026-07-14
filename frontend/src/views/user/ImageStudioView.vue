@@ -101,15 +101,42 @@
               <div v-else-if="results.length" class="w-full">
                 <p v-if="failedResultCount" class="mb-4 text-sm text-amber-700 dark:text-amber-300">{{ t('imageStudio.partialResult') }}</p>
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <img
+                  <div
                     v-for="(result, index) in results"
                     :key="`${generationId}-${index}`"
-                    :src="result.src"
-                    :alt="`${t('imageStudio.resultAlt')} ${index + 1}`"
-                    data-testid="generated-image"
-                    class="aspect-square w-full bg-gray-100 object-contain dark:bg-dark-800"
-                  />
+                    class="min-w-0"
+                  >
+                    <img
+                      :src="result.src"
+                      :alt="`${t('imageStudio.resultAlt')} ${index + 1}`"
+                      data-testid="generated-image"
+                      class="aspect-square w-full bg-gray-100 object-contain dark:bg-dark-800"
+                    />
+                    <button
+                      type="button"
+                      :data-testid="`edit-result-${index}`"
+                      class="btn btn-secondary mt-2 flex h-9 w-full items-center justify-center"
+                      :disabled="transferringResult !== null"
+                      @click="transferResultToEdit(result, index)"
+                    >
+                      {{ transferringResult === index ? t('imageStudio.transferring') : t('imageStudio.editThisImage') }}
+                    </button>
+                    <button
+                      type="button"
+                      :data-testid="`download-result-${index}`"
+                      class="btn btn-secondary mt-2 flex h-9 w-full items-center justify-center"
+                      :disabled="downloadState.generate === 'preparing'"
+                      @click="downloadResults('generate', results, index)"
+                    >
+                      {{ t('imageStudio.download') }}
+                    </button>
+                  </div>
                 </div>
+                <button v-if="results.length > 1" type="button" data-testid="download-all" class="btn btn-secondary mt-4 flex h-10 w-full items-center justify-center" :disabled="downloadState.generate === 'preparing'" @click="downloadResults('generate', results)">
+                  {{ t('imageStudio.downloadAll') }}
+                </button>
+                <p v-if="downloadState.generate !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('generate') }}</p>
+                <p v-if="transferError" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.transferFailed') }}</p>
               </div>
               <p v-else-if="generationError" class="text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.generationFailed') }}</p>
               <div v-else class="max-w-sm text-center">
@@ -120,8 +147,109 @@
           </div>
         </template>
         <template v-else>
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.tabs.edit') }}</h2>
-          <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.editDescription') }}</p>
+          <div class="grid gap-8 lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)]">
+            <form data-testid="edit-form" class="space-y-5" @submit.prevent="edit">
+              <div>
+                <label for="image-studio-edit-key" class="input-label mb-1.5 block">{{ t('imageStudio.apiKey') }}</label>
+                <select
+                  id="image-studio-edit-key"
+                  v-model.number="selectedKeyId"
+                  class="input w-full"
+                  :disabled="loadingKeys || editSubmitting || eligibleKeys.length === 0"
+                >
+                  <option v-for="key in eligibleKeys" :key="key.id" :value="key.id">
+                    {{ key.name }} (...{{ key.key.slice(-4) }})
+                  </option>
+                </select>
+              </div>
+
+              <div v-if="loadingCapabilities" class="flex min-h-24 items-center justify-center">
+                <LoadingSpinner />
+              </div>
+              <p v-else-if="capabilityError || !editModel" class="text-sm text-red-600 dark:text-red-400">
+                {{ t('imageStudio.capabilitiesUnavailable') }}
+              </p>
+              <template v-else>
+                <div>
+                  <label for="image-studio-edit-model" class="input-label mb-1.5 block">{{ t('imageStudio.model') }}</label>
+                  <select id="image-studio-edit-model" v-model="editModelId" class="input w-full" :disabled="editSubmitting">
+                    <option v-for="model in editModels" :key="model.id" :value="model.id">{{ model.id }}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="input-label mb-1.5 block" for="image-studio-edit-files">{{ t('imageStudio.uploadImages') }}</label>
+                  <label
+                    data-testid="edit-drop-zone"
+                    for="image-studio-edit-files"
+                    class="flex min-h-28 cursor-pointer flex-col items-center justify-center border border-dashed border-gray-300 px-4 py-5 text-center text-sm text-gray-600 hover:border-primary-400 dark:border-dark-500 dark:text-gray-300"
+                    @dragover.prevent
+                    @drop.prevent="handleDrop"
+                  >
+                    {{ t('imageStudio.uploadHint') }}
+                    <input
+                      id="image-studio-edit-files"
+                      data-testid="edit-file-input"
+                      type="file"
+                      class="sr-only"
+                      multiple
+                      :accept="capabilities?.uploads.mime_types.join(',')"
+                      :disabled="editSubmitting"
+                      @change="handleFileSelection"
+                    />
+                  </label>
+                  <p v-if="uploadError" role="alert" class="mt-2 text-sm text-red-600 dark:text-red-400">{{ uploadError }}</p>
+                  <ul v-if="uploads.length" class="mt-3 space-y-2">
+                    <li v-for="(upload, index) in uploads" :key="upload.previewUrl" class="flex min-w-0 items-center gap-3 text-sm text-gray-700 dark:text-gray-200">
+                      <img :src="upload.previewUrl" alt="" class="h-10 w-10 shrink-0 object-cover" />
+                      <span class="min-w-0 flex-1 truncate">{{ upload.file.name }}</span>
+                      <button type="button" class="btn btn-secondary px-2 py-1" :aria-label="t('imageStudio.removeImage')" @click="removeUpload(index)">×</button>
+                    </li>
+                  </ul>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <CapabilitySelect v-if="editModel.parameters.size" id="image-studio-edit-size" v-model="editForm.size" :label="t('imageStudio.size')" :capability="editModel.parameters.size" :disabled="editSubmitting" />
+                  <CapabilitySelect v-if="editModel.parameters.quality" id="image-studio-edit-quality" v-model="editForm.quality" :label="t('imageStudio.quality')" :capability="editModel.parameters.quality" :disabled="editSubmitting" />
+                  <CapabilitySelect v-if="editModel.parameters.background" id="image-studio-edit-background" v-model="editForm.background" :label="t('imageStudio.background')" :capability="editModel.parameters.background" :disabled="editSubmitting" />
+                  <CapabilitySelect v-if="editModel.parameters.output_format" id="image-studio-edit-output-format" v-model="editForm.outputFormat" :label="t('imageStudio.outputFormat')" :capability="editModel.parameters.output_format" :disabled="editSubmitting" />
+                  <div v-if="editModel.parameters.n">
+                    <label for="image-studio-edit-count" class="input-label mb-1.5 block">{{ t('imageStudio.imageCount') }}</label>
+                    <input id="image-studio-edit-count" v-model.number="editForm.n" type="number" class="input w-full" :min="editModel.parameters.n.min" :max="editModel.parameters.n.max" :disabled="editSubmitting" />
+                  </div>
+                </div>
+
+                <TextArea v-model="editForm.prompt" data-testid="edit-prompt" :label="t('imageStudio.editPrompt')" :placeholder="t('imageStudio.editPromptPlaceholder')" :rows="5" />
+                <button type="submit" class="btn btn-primary flex h-10 w-full items-center justify-center" :disabled="editSubmitting || !canEdit">
+                  <LoadingSpinner v-if="editSubmitting" class="mr-2" />
+                  {{ editSubmitting ? t('imageStudio.editing') : t('imageStudio.edit') }}
+                </button>
+              </template>
+            </form>
+
+            <div class="flex min-h-80 items-center justify-center border-l-0 border-gray-200 lg:border-l lg:pl-8 dark:border-dark-600">
+              <div v-if="editSubmitting" class="text-center">
+                <LoadingSpinner />
+                <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.editing') }}</p>
+              </div>
+              <div v-else-if="editResults.length" class="w-full">
+                <p v-if="editFailedResultCount" class="mb-4 text-sm text-amber-700 dark:text-amber-300">{{ t('imageStudio.partialResult') }}</p>
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div v-for="(result, index) in editResults" :key="`${editGenerationId}-${index}`" class="min-w-0">
+                    <img :src="result.src" :alt="`${t('imageStudio.resultAlt')} ${index + 1}`" data-testid="edited-image" class="aspect-square w-full bg-gray-100 object-contain dark:bg-dark-800" />
+                    <button type="button" class="btn btn-secondary mt-2 flex h-9 w-full items-center justify-center" :disabled="downloadState.edit === 'preparing'" @click="downloadResults('edit', editResults, index)">{{ t('imageStudio.download') }}</button>
+                  </div>
+                </div>
+                <button v-if="editResults.length > 1" type="button" class="btn btn-secondary mt-4 flex h-10 w-full items-center justify-center" :disabled="downloadState.edit === 'preparing'" @click="downloadResults('edit', editResults)">{{ t('imageStudio.downloadAll') }}</button>
+                <p v-if="downloadState.edit !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('edit') }}</p>
+              </div>
+              <p v-else-if="editError" class="text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.editFailed') }}</p>
+              <div v-else class="max-w-sm text-center">
+                <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.editBlankTitle') }}</h2>
+                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.editBlankDescription') }}</p>
+              </div>
+            </div>
+          </div>
         </template>
       </section>
     </main>
@@ -129,7 +257,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import CapabilitySelect from '@/components/image-studio/CapabilitySelect.vue'
@@ -138,6 +266,7 @@ import TextArea from '@/components/common/TextArea.vue'
 import { keysAPI } from '@/api/keys'
 import {
   generateImageStudioImages,
+  editImageStudioImages,
   getImageStudioCapabilities,
   type ImageStudioCapabilities,
   type ImageStudioGenerationResult,
@@ -145,6 +274,7 @@ import {
 import type { ApiKey } from '@/types'
 
 type StudioTab = 'generate' | 'edit'
+type DownloadState = 'idle' | 'preparing' | 'success' | 'failed'
 
 const { t } = useI18n()
 const tabs: StudioTab[] = ['generate', 'edit']
@@ -161,16 +291,212 @@ const generationError = ref(false)
 const results = ref<ImageStudioGenerationResult[]>([])
 const failedResultCount = ref(0)
 const generationId = ref(0)
+const transferringResult = ref<number | null>(null)
+const transferError = ref(false)
+const downloadState = reactive<Record<StudioTab, DownloadState>>({ generate: 'idle', edit: 'idle' })
+const editModelId = ref('')
+const editSubmitting = ref(false)
+const editError = ref(false)
+const editResults = ref<ImageStudioGenerationResult[]>([])
+const editFailedResultCount = ref(0)
+const editGenerationId = ref(0)
+const uploadError = ref('')
+const uploads = ref<Array<{ file: File; previewUrl: string }>>([])
 let capabilityRequest = 0
 
 const form = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
+const editForm = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
 const selectedKey = computed(() => eligibleKeys.value.find((key) => key.id === selectedKeyId.value))
 const selectedModel = computed(() => capabilities.value?.models.find((model) => model.id === selectedModelId.value))
+const editModels = computed(() => capabilities.value?.models.filter((model) => model.operations.includes('edit')) || [])
+const editModel = computed(() => editModels.value.find((model) => model.id === editModelId.value))
 const canGenerate = computed(() => {
   if (!selectedKey.value || !selectedModel.value || !form.prompt.trim()) return false
   const count = selectedModel.value.parameters.n
   return !count || (Number.isInteger(form.n) && form.n >= count.min && form.n <= count.max)
 })
+const canEdit = computed(() => {
+  if (!selectedKey.value || !editModel.value || uploads.value.length === 0 || !editForm.prompt.trim()) return false
+  const count = editModel.value.parameters.n
+  return !count || (Number.isInteger(editForm.n) && editForm.n >= count.min && editForm.n <= count.max)
+})
+
+function clearUploads() {
+  for (const upload of uploads.value) URL.revokeObjectURL(upload.previewUrl)
+  uploads.value = []
+}
+
+function replaceUploads(files: File[]) {
+  clearUploads()
+  uploads.value = files.map((file) => ({ file, previewUrl: URL.createObjectURL(file) }))
+  editResults.value = []
+  editFailedResultCount.value = 0
+  editError.value = false
+  downloadState.edit = 'idle'
+}
+
+function validateUploads(files: File[]): string {
+  const limits = capabilities.value?.uploads
+  if (!limits || files.some((file) => !limits.mime_types.includes(file.type))) return t('imageStudio.uploadErrors.mime')
+  if (files.length > limits.max_files) return t('imageStudio.uploadErrors.count')
+  if (files.some((file) => file.size > limits.max_file_bytes)) return t('imageStudio.uploadErrors.fileSize')
+  if (files.reduce((total, file) => total + file.size, 0) > limits.max_total_bytes) return t('imageStudio.uploadErrors.totalSize')
+  return ''
+}
+
+function acceptUploads(files: File[]) {
+  const error = validateUploads(files)
+  uploadError.value = error
+  if (!error) replaceUploads(files)
+}
+
+function handleFileSelection(event: Event) {
+  const input = event.target as HTMLInputElement
+  acceptUploads(Array.from(input.files || []))
+  input.value = ''
+}
+
+function handleDrop(event: DragEvent) {
+  acceptUploads(Array.from(event.dataTransfer?.files || []))
+}
+
+function removeUpload(index: number) {
+  const [removed] = uploads.value.splice(index, 1)
+  if (removed) URL.revokeObjectURL(removed.previewUrl)
+  uploadError.value = ''
+}
+
+async function resultToBlob(result: ImageStudioGenerationResult): Promise<Blob> {
+  if (result.src.startsWith('data:')) {
+    const match = /^data:([^;,]+);base64,(.+)$/i.exec(result.src)
+    if (!match) throw new Error('Invalid generated image')
+    const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0))
+    return new Blob([bytes], { type: match[1] })
+  }
+  const response = await fetch(result.src)
+  if (!response.ok) throw new Error('Generated image unavailable')
+  return response.blob()
+}
+
+async function resultToFile(result: ImageStudioGenerationResult): Promise<File> {
+  const blob = await resultToBlob(result)
+  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'
+  return new File([blob], `${t('imageStudio.transferFilename')}.${extension}`, { type: blob.type || 'image/png' })
+}
+
+function downloadStateText(kind: StudioTab) {
+  const keys: Record<Exclude<DownloadState, 'idle'>, string> = {
+    preparing: 'imageStudio.downloadPreparing',
+    success: 'imageStudio.downloadSuccess',
+    failed: 'imageStudio.downloadFailed',
+  }
+  const state = downloadState[kind]
+  return state === 'idle' ? '' : t(keys[state])
+}
+
+function downloadFilename(blob: Blob, index: number) {
+  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'
+  const prefix = t('imageStudio.downloadFilename')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .split('')
+    .filter((character) => character.charCodeAt(0) >= 32)
+    .join('')
+    .replace(/^[. ]+|[. ]+$/g, '') || 'image-studio-result'
+  return `${prefix}-${index + 1}.${extension}`
+}
+
+async function saveResult(result: ImageStudioGenerationResult, index: number) {
+  const blob = await resultToBlob(result)
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = downloadFilename(blob, index)
+    anchor.click()
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+async function downloadResults(kind: StudioTab, availableResults: ImageStudioGenerationResult[], onlyIndex?: number) {
+  if (downloadState[kind] === 'preparing') return
+  downloadState[kind] = 'preparing'
+  try {
+    if (onlyIndex !== undefined) {
+      await saveResult(availableResults[onlyIndex], onlyIndex)
+    } else {
+      for (let index = 0; index < availableResults.length; index += 1) await saveResult(availableResults[index], index)
+    }
+    downloadState[kind] = 'success'
+  } catch {
+    downloadState[kind] = 'failed'
+  }
+}
+
+async function transferResultToEdit(result: ImageStudioGenerationResult, index: number) {
+  if (transferringResult.value !== null) return
+  transferringResult.value = index
+  transferError.value = false
+  try {
+    const file = await resultToFile(result)
+    const validationError = validateUploads([file])
+    if (validationError) {
+      uploadError.value = validationError
+      transferError.value = true
+      return
+    }
+    replaceUploads([file])
+    uploadError.value = ''
+    activeTab.value = 'edit'
+  } catch {
+    transferError.value = true
+  } finally {
+    transferringResult.value = null
+  }
+}
+
+function resetEditModelValues() {
+  const parameters = editModel.value?.parameters
+  editForm.size = parameters?.size?.default || ''
+  editForm.quality = parameters?.quality?.default || ''
+  editForm.background = parameters?.background?.default || ''
+  editForm.outputFormat = parameters?.output_format?.default || ''
+  editForm.n = parameters?.n?.default || 1
+  clearUploads()
+  uploadError.value = ''
+  editResults.value = []
+  editFailedResultCount.value = 0
+  editError.value = false
+  downloadState.edit = 'idle'
+}
+
+async function edit() {
+  if (editSubmitting.value || !canEdit.value || !selectedKey.value || !editModel.value) return
+  const parameters = editModel.value.parameters
+  const payload: Record<string, string | number> = { model: editModel.value.id, prompt: editForm.prompt.trim() }
+  if (parameters.size) payload.size = editForm.size
+  if (parameters.quality) payload.quality = editForm.quality
+  if (parameters.background) payload.background = editForm.background
+  if (parameters.output_format) payload.output_format = editForm.outputFormat
+  if (parameters.n) payload.n = editForm.n
+
+  editSubmitting.value = true
+  editError.value = false
+  editResults.value = []
+  editFailedResultCount.value = 0
+  downloadState.edit = 'idle'
+  try {
+    const response = await editImageStudioImages(selectedKey.value.key, uploads.value.map(({ file }) => file), payload, parameters.output_format ? editForm.outputFormat : 'png')
+    editResults.value = response.images
+    editFailedResultCount.value = response.failedCount
+    editGenerationId.value += 1
+    editError.value = response.images.length === 0
+  } catch {
+    editError.value = true
+  } finally {
+    editSubmitting.value = false
+  }
+}
 
 function resetModelValues() {
   const parameters = selectedModel.value?.parameters
@@ -182,6 +508,7 @@ function resetModelValues() {
   results.value = []
   failedResultCount.value = 0
   generationError.value = false
+  downloadState.generate = 'idle'
 }
 
 async function generate() {
@@ -201,6 +528,7 @@ async function generate() {
   generationError.value = false
   results.value = []
   failedResultCount.value = 0
+  downloadState.generate = 'idle'
   try {
     const response = await generateImageStudioImages(
       selectedKey.value.key,
@@ -219,11 +547,13 @@ async function generate() {
 }
 
 watch(selectedModelId, resetModelValues)
+watch(editModelId, resetEditModelValues)
 
 watch(selectedKeyId, async () => {
   const request = ++capabilityRequest
   capabilities.value = null
   selectedModelId.value = ''
+  editModelId.value = ''
   capabilityError.value = false
   if (!selectedKey.value) return
   loadingCapabilities.value = true
@@ -232,6 +562,7 @@ watch(selectedKeyId, async () => {
     if (request !== capabilityRequest) return
     capabilities.value = loaded
     selectedModelId.value = loaded.models.find((model) => model.operations.includes('generate'))?.id || ''
+    editModelId.value = loaded.models.find((model) => model.operations.includes('edit'))?.id || ''
   } catch {
     if (request === capabilityRequest) capabilityError.value = true
   } finally {
@@ -256,4 +587,6 @@ onMounted(async () => {
     loadingKeys.value = false
   }
 })
+
+onBeforeUnmount(clearUploads)
 </script>

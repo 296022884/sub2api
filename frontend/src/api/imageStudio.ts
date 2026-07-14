@@ -125,3 +125,37 @@ export async function generateImageStudioImages(
   }
   return { images, failedCount }
 }
+
+export async function editImageStudioImages(
+  apiKey: string,
+  files: File[],
+  payload: Record<string, string | number>,
+  outputFormat: string,
+): Promise<ImageStudioGenerationResponse> {
+  const body = new FormData()
+  for (const file of files) body.append('image', file)
+  for (const [name, value] of Object.entries(payload)) body.append(name, String(value))
+
+  const response = await fetch(buildGatewayUrl('/v1/images/edits'), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body,
+  })
+  if (!response.ok) throw new Error('Image editing failed')
+
+  const responseBody = await response.json() as { data?: Array<{ b64_json?: unknown; url?: unknown }> }
+  if (!Array.isArray(responseBody.data)) throw new Error('Invalid image editing response')
+  const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
+  const images: ImageStudioGenerationResult[] = []
+  let failedCount = 0
+  for (const item of responseBody.data) {
+    if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+      images.push({ src: `data:${mime};base64,${item.b64_json}` })
+    } else if (typeof item.url === 'string' && /^https?:\/\//i.test(item.url)) {
+      images.push({ src: item.url })
+    } else {
+      failedCount += 1
+    }
+  }
+  return { images, failedCount }
+}

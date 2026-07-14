@@ -31,12 +31,41 @@ vi.mock('vue-i18n', async (importOriginal) => ({
       'imageStudio.capabilitiesUnavailable': 'Image controls are unavailable.',
       'imageStudio.partialResult': 'Some images could not be generated.',
       'imageStudio.resultAlt': 'Generated image',
+      'imageStudio.uploadImages': 'Source images',
+      'imageStudio.uploadHint': 'Choose or drop images',
+      'imageStudio.removeImage': 'Remove image',
+      'imageStudio.editPrompt': 'Edit instructions',
+      'imageStudio.editPromptPlaceholder': 'Describe the changes',
+      'imageStudio.edit': 'Edit image',
+      'imageStudio.editing': 'Editing image',
+      'imageStudio.editBlankTitle': 'Edited images will appear here',
+      'imageStudio.editBlankDescription': 'Add source images and instructions to begin.',
+      'imageStudio.uploadErrors.mime': 'This file type is not supported.',
+      'imageStudio.uploadErrors.count': 'Too many images selected.',
+      'imageStudio.uploadErrors.fileSize': 'An image is too large.',
+      'imageStudio.uploadErrors.totalSize': 'The images are too large together.',
+      'imageStudio.editFailed': 'The image could not be edited.',
+      'imageStudio.editThisImage': 'Edit this image',
+      'imageStudio.transferring': 'Preparing image',
+      'imageStudio.transferFailed': 'The image could not be prepared for editing.',
+      'imageStudio.transferFilename': 'image-studio-source',
+      'imageStudio.download': 'Download',
+      'imageStudio.downloadAll': 'Download all',
+      'imageStudio.downloadPreparing': 'Preparing download',
+      'imageStudio.downloadSuccess': 'Download ready',
+      'imageStudio.downloadFailed': 'Download failed',
+      'imageStudio.downloadFilename': 'image-studio-result',
     })[key] ?? key,
   }),
 }))
 
 describe('Image Studio workspace shell', () => {
   beforeEach(() => {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn((file: File) => `blob:${file.name}`),
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
     listKeys.mockResolvedValue({
       items: [
         {
@@ -57,10 +86,10 @@ describe('Image Studio workspace shell', () => {
       pages: 1,
     })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      operations: ['generate'],
+      operations: ['generate', 'edit'],
       models: [{
         id: 'gpt-image-2',
-        operations: ['generate'],
+        operations: ['generate', 'edit'],
         parameters: {
           size: { values: ['auto', '1024x1024'], default: 'auto' },
           quality: { values: ['auto', 'high'], default: 'auto' },
@@ -68,7 +97,12 @@ describe('Image Studio workspace shell', () => {
           n: { min: 1, max: 2, default: 1 },
         },
       }],
-      uploads: { mime_types: [], max_files: 0, max_file_bytes: 0, max_total_bytes: 0 },
+      uploads: {
+        mime_types: ['image/png', 'image/jpeg'],
+        max_files: 2,
+        max_file_bytes: 8,
+        max_total_bytes: 12,
+      },
     }), { status: 200 })))
   })
 
@@ -84,7 +118,7 @@ describe('Image Studio workspace shell', () => {
     expect(tabs[0].attributes('aria-selected')).toBe('true')
 
     await tabs[1].trigger('click')
-    expect(wrapper.get('[role="tabpanel"]').text()).toContain('Edit description')
+    expect(wrapper.get('[role="tabpanel"]').text()).toContain('Edited images will appear here')
   })
 
   it('selects the first eligible key and renders only server-authored controls', async () => {
@@ -160,5 +194,170 @@ describe('Image Studio workspace shell', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(0)
     expect(wrapper.text()).not.toContain('Some images could not be generated.')
+  })
+
+  it('validates selected edit images against every server-authored upload limit', async () => {
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+
+    const input = wrapper.get('[data-testid="edit-file-input"]')
+    const selectFiles = async (files: File[]) => {
+      Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+      await input.trigger('change')
+    }
+
+    await selectFiles([new File(['gif'], 'source.gif', { type: 'image/gif' })])
+    expect(wrapper.text()).toContain('This file type is not supported.')
+
+    await selectFiles([
+      new File(['a'], 'one.png', { type: 'image/png' }),
+      new File(['b'], 'two.png', { type: 'image/png' }),
+      new File(['c'], 'three.png', { type: 'image/png' }),
+    ])
+    expect(wrapper.text()).toContain('Too many images selected.')
+
+    await selectFiles([new File(['123456789'], 'large.png', { type: 'image/png' })])
+    expect(wrapper.text()).toContain('An image is too large.')
+
+    await selectFiles([
+      new File(['1234567'], 'one.png', { type: 'image/png' }),
+      new File(['1234567'], 'two.png', { type: 'image/png' }),
+    ])
+    expect(wrapper.text()).toContain('The images are too large together.')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts dropped images and submits supported edit fields as multipart with the selected key', async () => {
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+
+    const source = new File(['source'], 'source.png', { type: 'image/png' })
+    await wrapper.get('[data-testid="edit-drop-zone"]').trigger('drop', {
+      dataTransfer: { files: [source] },
+    })
+    expect(wrapper.text()).toContain('source.png')
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [{ b64_json: 'ZWRpdGVk' }],
+    }), { status: 200 }))
+    await wrapper.get('[data-testid="edit-form"] textarea').setValue('Make the sky blue')
+    await wrapper.get('[data-testid="edit-form"]').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid="edited-image"]')).toHaveLength(1))
+    const editCall = vi.mocked(fetch).mock.calls[1]
+    expect(new URL(String(editCall?.[0])).pathname).toBe('/v1/images/edits')
+    expect(editCall?.[1]?.headers).toEqual({ Authorization: 'Bearer sk-first-1234' })
+    const body = editCall?.[1]?.body as FormData
+    expect(body).toBeInstanceOf(FormData)
+    expect(body.getAll('image')).toEqual([source])
+    expect(body.get('model')).toBe('gpt-image-2')
+    expect(body.get('prompt')).toBe('Make the sky blue')
+    expect(body.get('size')).toBe('auto')
+    expect(body.get('quality')).toBe('auto')
+    expect(body.get('output_format')).toBe('png')
+    expect(body.has('background')).toBe(false)
+  })
+
+  it('transfers a generated result into Edit as an in-memory file', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1n' }],
+    }), { status: 200 }))
+    await wrapper.get('textarea').setValue('A source image')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="edit-result-0"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="edit-result-0"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.findAll('[role="tab"]')[1].attributes('aria-selected')).toBe('true'))
+    expect(wrapper.text()).toContain('image-studio-source.png')
+    expect(URL.createObjectURL).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'image-studio-source.png',
+      type: 'image/png',
+    }))
+    expect(setItem).not.toHaveBeenCalled()
+  })
+
+  it('downloads an individual result with a safe localized filename and success state', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'aW1n' }] }), { status: 200 }))
+    await wrapper.get('textarea').setValue('A downloadable image')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="download-result-0"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="download-result-0"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Download ready'))
+    expect(click).toHaveBeenCalledOnce()
+    const anchor = click.mock.instances[0]
+    expect(anchor.download).toBe('image-studio-result-1.png')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:undefined')
+  })
+
+  it('shows preparing and failure states while downloading all results', async () => {
+    let resolveRemote: (response: Response) => void = () => {}
+    const remoteResponse = new Promise<Response>((resolve) => { resolveRemote = resolve })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [{ b64_json: 'aW1n' }, { url: 'https://images.example/two.png' }],
+    }), { status: 200 }))
+    await wrapper.get('textarea').setValue('Two downloadable images')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="download-all"]').exists()).toBe(true))
+    vi.mocked(fetch).mockReturnValueOnce(remoteResponse)
+
+    await wrapper.get('[data-testid="download-all"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Preparing download'))
+    resolveRemote(new Response(new Blob(['remote'], { type: 'image/png' }), { status: 200 }))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Download ready'))
+
+    vi.mocked(fetch).mockRejectedValueOnce(new Error('secret upstream response'))
+    await wrapper.get('[data-testid="download-all"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Download failed'))
+    expect(wrapper.text()).not.toContain('secret upstream response')
+  })
+
+  it('keeps valid uploads on validation failure and revokes preview URLs on replacement and unmount', async () => {
+    const wrapper = mount(ImageStudioView, {
+      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+    })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    const input = wrapper.get('[data-testid="edit-file-input"]')
+    const selectFiles = async (files: File[]) => {
+      Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+      await input.trigger('change')
+    }
+
+    await selectFiles([new File(['one'], 'one.png', { type: 'image/png' })])
+    await selectFiles([new File(['bad'], 'bad.gif', { type: 'image/gif' })])
+    expect(wrapper.text()).toContain('one.png')
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:one.png')
+
+    await selectFiles([new File(['two'], 'two.png', { type: 'image/png' })])
+    expect(wrapper.text()).not.toContain('one.png')
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:one.png')
+
+    wrapper.unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:two.png')
   })
 })
