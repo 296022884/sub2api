@@ -3,14 +3,18 @@ import { unzipSync } from 'fflate'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ImageStudioView from '../ImageStudioView.vue'
 
-const { listKeys } = vi.hoisted(() => ({ listKeys: vi.fn() }))
+const { appStore, listKeys } = vi.hoisted(() => ({
+  appStore: { cachedPublicSettings: { image_studio_enabled: true } },
+  listKeys: vi.fn(),
+}))
 
 vi.mock('@/api/keys', () => ({ keysAPI: { list: listKeys } }))
+vi.mock('@/stores/app', () => ({ useAppStore: () => appStore }))
 
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
   useI18n: () => ({
-    t: (key: string) => ({
+    t: (key: string, params?: Record<string, unknown>) => ({
       'imageStudio.title': 'Image Studio',
       'imageStudio.tabs.generate': 'Generate',
       'imageStudio.tabs.edit': 'Edit',
@@ -56,7 +60,14 @@ vi.mock('vue-i18n', async (importOriginal) => ({
       'imageStudio.downloadSuccess': 'Download ready',
       'imageStudio.downloadFailed': 'Download failed',
       'imageStudio.downloadFilename': 'image-studio-result',
-    })[key] ?? key,
+      'imageStudio.featureDisabled': 'Image Studio has been disabled. New requests are blocked.',
+      'imageStudio.errors.rateLimited': 'Too many requests. Try again in {seconds} seconds.',
+      'imageStudio.errors.insufficientBalance': 'Your balance is too low for this request.',
+      'imageStudio.errors.moderationRejected': 'The request was rejected by content policy.',
+      'imageStudio.errors.invalidKey': 'This API key is invalid or has been revoked.',
+      'imageStudio.errors.unknown': 'The request failed. Try again manually.',
+      'imageStudio.errors.requestId': 'Request ID: {requestId}',
+    } as Record<string, string>)[key]?.replace(/\{(\w+)\}/g, (_match, name) => String(params?.[name] ?? '')) ?? key,
   }),
 }))
 
@@ -74,6 +85,7 @@ async function mountReadyStudio() {
 
 describe('Image Studio workspace shell', () => {
   beforeEach(() => {
+    appStore.cachedPublicSettings = { image_studio_enabled: true }
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn((file: File) => `blob:${file.name}`),
@@ -195,6 +207,95 @@ describe('Image Studio workspace shell', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
     expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(0)
     expect(wrapper.text()).not.toContain('Some images could not be generated.')
+  })
+
+  it.each([
+    ['rate limiting', 429, { error: { code: 'rate_limit_exceeded', message: 'raw upstream secret' } }, { 'Retry-After': '17' }, 'Too many requests. Try again in 17 seconds.'],
+    ['insufficient balance', 402, { error: { code: 'insufficient_balance', message: 'raw upstream secret' } }, {}, 'Your balance is too low for this request.'],
+    ['moderation rejection', 400, { error: { code: 'content_policy_violation', message: 'raw upstream secret' } }, {}, 'The request was rejected by content policy.'],
+    ['invalid or revoked key', 401, { error: { code: 'invalid_api_key', message: 'Bearer sk-plaintext-secret' } }, {}, 'This API key is invalid or has been revoked.'],
+    ['unknown failure', 503, { error: { code: 'upstream_failure', message: 'base64:super-secret-image' } }, {}, 'The request failed. Try again manually.'],
+  ])('shows a deterministic safe state for %s', async (_name, status, body, headers, expected) => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const clipboardWrite = vi.fn()
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboardWrite } })
+    const wrapper = await mountReadyStudio()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      ...body,
+      request_id: 'req-safe-123',
+      authorization: 'Bearer sk-plaintext-secret',
+      image: 'base64:super-secret-image',
+    }), { status, headers: { ...headers, 'X-Request-ID': 'req-safe-123' } }))
+
+    await wrapper.get('textarea').setValue('Sensitive prompt body')
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain(expected))
+    expect(wrapper.text()).toContain('Request ID: req-safe-123')
+    expect(wrapper.text()).not.toMatch(/raw upstream secret|sk-plaintext-secret|base64:super-secret-image|Sensitive prompt body/)
+    expect(setItem).not.toHaveBeenCalled()
+    expect(clipboardWrite).not.toHaveBeenCalled()
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('secret')
+    expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain('secret')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('accepts only one submission while a request is pending and never retries a failure', async () => {
+    let resolveGeneration: (response: Response) => void = () => {}
+    const generationResponse = new Promise<Response>((resolve) => { resolveGeneration = resolve })
+    const wrapper = await mountReadyStudio()
+    vi.mocked(fetch).mockReturnValueOnce(generationResponse)
+    await wrapper.get('textarea').setValue('One request only')
+
+    await wrapper.get('form').trigger('submit')
+    await wrapper.get('form').trigger('submit')
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    resolveGeneration(new Response('{}', { status: 503 }))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('The request failed. Try again manually.'))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the same sanitized operational states for Edit and rejects unsafe request IDs', async () => {
+    const wrapper = await mountReadyStudio()
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    const input = wrapper.get('[data-testid="edit-file-input"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['source'], 'source.png', { type: 'image/png' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('[data-testid="edit-form"] textarea').setValue('Change the image')
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      request_id: 'Bearer sk-unsafe-request-id',
+      error: { code: 'moderation_blocked', message: 'raw rejected prompt and image' },
+    }), { status: 400 }))
+
+    await wrapper.get('[data-testid="edit-form"]').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('The request was rejected by content policy.'))
+    expect(wrapper.text()).not.toMatch(/Request ID|sk-unsafe|raw rejected/)
+  })
+
+  it('lets an in-flight response settle after disablement and blocks every later submission', async () => {
+    let resolveGeneration: (response: Response) => void = () => {}
+    const generationResponse = new Promise<Response>((resolve) => { resolveGeneration = resolve })
+    const wrapper = await mountReadyStudio()
+    vi.mocked(fetch).mockReturnValueOnce(generationResponse)
+    await wrapper.get('textarea').setValue('Finish this request')
+    await wrapper.get('form').trigger('submit')
+
+    appStore.cachedPublicSettings = { image_studio_enabled: false }
+    resolveGeneration(new Response(JSON.stringify({ data: [{ b64_json: 'c2V0dGxlZA==' }] }), { status: 200 }))
+
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(1))
+    expect(wrapper.text()).toContain('Image Studio has been disabled. New requests are blocked.')
+    await wrapper.get('form').trigger('submit')
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
   })
 
   it('validates selected edit images against every server-authored upload limit', async () => {

@@ -92,15 +92,108 @@ export interface ImageStudioGenerationResponse {
   failedCount: number
 }
 
+export type ImageStudioFailureKind =
+  | 'rateLimited'
+  | 'insufficientBalance'
+  | 'moderationRejected'
+  | 'invalidKey'
+  | 'unknown'
+
+export class ImageStudioRequestError extends Error {
+  readonly kind: ImageStudioFailureKind
+  readonly requestId?: string
+  readonly retryAfterSeconds?: number
+
+  constructor(kind: ImageStudioFailureKind, requestId?: string, retryAfterSeconds?: number) {
+    super('Image Studio request failed')
+    this.name = 'ImageStudioRequestError'
+    this.kind = kind
+    this.requestId = requestId
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+function safeRequestId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(trimmed) ? trimmed : undefined
+}
+
+function retryAfterSeconds(value: string | null): number {
+  if (value) {
+    const seconds = Number(value)
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1, Math.ceil(seconds))
+    const date = Date.parse(value)
+    if (Number.isFinite(date)) return Math.max(1, Math.ceil((date - Date.now()) / 1000))
+  }
+  return 60
+}
+
+function responseErrorSignals(body: unknown) {
+  if (!body || typeof body !== 'object') return { code: '', type: '', message: '' }
+  const value = body as {
+    code?: unknown
+    message?: unknown
+    error?: { code?: unknown; type?: unknown; message?: unknown } | unknown
+  }
+  const error = value.error && typeof value.error === 'object'
+    ? value.error as { code?: unknown; type?: unknown; message?: unknown }
+    : undefined
+  const lower = (candidate: unknown) => typeof candidate === 'string' ? candidate.toLowerCase() : ''
+  return {
+    code: lower(error?.code ?? value.code),
+    type: lower(error?.type),
+    message: lower(error?.message ?? value.message ?? value.error),
+  }
+}
+
+async function requestError(response: Response): Promise<ImageStudioRequestError> {
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    body = undefined
+  }
+  const signal = responseErrorSignals(body)
+  const bodyRequestId = body && typeof body === 'object'
+    ? safeRequestId((body as { request_id?: unknown }).request_id)
+    : undefined
+  const requestId = safeRequestId(response.headers.get('x-request-id')) ?? bodyRequestId
+
+  if (response.status === 429 || signal.type.includes('rate_limit') || ['rate_limit_exceeded', 'rate_limited'].includes(signal.code)) {
+    return new ImageStudioRequestError('rateLimited', requestId, retryAfterSeconds(response.headers.get('retry-after')))
+  }
+  if (response.status === 402 || signal.type === 'billing_error'
+    || ['insufficient_balance', 'insufficient_quota'].includes(signal.code)
+    || signal.message.includes('insufficient balance')) {
+    return new ImageStudioRequestError('insufficientBalance', requestId)
+  }
+  if (['content_policy_violation', 'moderation_blocked', 'moderation_rejected'].includes(signal.code)
+    || signal.code.includes('safety_violation')) {
+    return new ImageStudioRequestError('moderationRejected', requestId)
+  }
+  if (response.status === 401 || ['invalid_api_key', 'key_revoked', 'api_key_revoked'].includes(signal.code)
+    || signal.message.includes('api key has been revoked')) {
+    return new ImageStudioRequestError('invalidKey', requestId)
+  }
+  return new ImageStudioRequestError('unknown', requestId)
+}
+
 async function normalizeImageResponse(
   response: Response,
   outputFormat: string,
-  operation: 'generation' | 'editing',
 ): Promise<ImageStudioGenerationResponse> {
-  if (!response.ok) throw new Error(`Image ${operation} failed`)
+  if (!response.ok) throw await requestError(response)
 
-  const body = await response.json() as { data?: Array<{ b64_json?: unknown; url?: unknown }> }
-  if (!Array.isArray(body.data)) throw new Error(`Invalid image ${operation} response`)
+  let body: { data?: Array<{ b64_json?: unknown; url?: unknown }> }
+  try {
+    body = await response.json() as typeof body
+  } catch {
+    throw new ImageStudioRequestError('unknown', safeRequestId(response.headers.get('x-request-id')))
+  }
+  if (!Array.isArray(body.data)) {
+    throw new ImageStudioRequestError('unknown', safeRequestId(response.headers.get('x-request-id')))
+  }
   const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
   const images: ImageStudioGenerationResult[] = []
   let failedCount = 0
@@ -129,7 +222,7 @@ export async function generateImageStudioImages(
     },
     body: JSON.stringify(payload),
   })
-  return normalizeImageResponse(response, outputFormat, 'generation')
+  return normalizeImageResponse(response, outputFormat)
 }
 
 export async function editImageStudioImages(
@@ -147,5 +240,5 @@ export async function editImageStudioImages(
     headers: { Authorization: `Bearer ${apiKey}` },
     body,
   })
-  return normalizeImageResponse(response, outputFormat, 'editing')
+  return normalizeImageResponse(response, outputFormat)
 }

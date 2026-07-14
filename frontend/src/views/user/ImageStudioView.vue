@@ -5,6 +5,10 @@
         <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.title') }}</h1>
       </header>
 
+      <p v-if="featureBlocked" role="alert" class="mb-5 break-words border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+        {{ t('imageStudio.featureDisabled') }}
+      </p>
+
       <div class="border-b border-gray-200 dark:border-dark-600">
         <div class="flex min-h-11 gap-6" role="tablist" :aria-label="t('imageStudio.title')">
           <button
@@ -138,7 +142,12 @@
                 <p v-if="downloadState.generate !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('generate') }}</p>
                 <p v-if="transferError" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.transferFailed') }}</p>
               </div>
-              <p v-else-if="generationError" class="text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.generationFailed') }}</p>
+              <div v-else-if="generationFailure" role="alert" class="max-w-md break-words text-sm text-red-600 dark:text-red-400">
+                <p>{{ failureText(generationFailure) }}</p>
+                <p v-if="generationFailure.requestId" class="mt-2 font-mono text-xs text-gray-600 dark:text-gray-300">
+                  {{ t('imageStudio.errors.requestId', { requestId: generationFailure.requestId }) }}
+                </p>
+              </div>
               <div v-else class="max-w-sm text-center">
                 <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.blankTitle') }}</h2>
                 <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.blankDescription') }}</p>
@@ -243,7 +252,12 @@
                 <button v-if="editResults.length > 1" type="button" class="btn btn-secondary mt-4 flex h-10 w-full items-center justify-center" :disabled="downloadState.edit === 'preparing'" @click="downloadResults('edit', editResults)">{{ t('imageStudio.downloadAll') }}</button>
                 <p v-if="downloadState.edit !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('edit') }}</p>
               </div>
-              <p v-else-if="editError" class="text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.editFailed') }}</p>
+              <div v-else-if="editFailure" role="alert" class="max-w-md break-words text-sm text-red-600 dark:text-red-400">
+                <p>{{ failureText(editFailure) }}</p>
+                <p v-if="editFailure.requestId" class="mt-2 font-mono text-xs text-gray-600 dark:text-gray-300">
+                  {{ t('imageStudio.errors.requestId', { requestId: editFailure.requestId }) }}
+                </p>
+              </div>
               <div v-else class="max-w-sm text-center">
                 <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.editBlankTitle') }}</h2>
                 <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.editBlankDescription') }}</p>
@@ -264,6 +278,7 @@ import CapabilitySelect from '@/components/image-studio/CapabilitySelect.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import { keysAPI } from '@/api/keys'
+import { useAppStore } from '@/stores/app'
 import {
   downloadImageArchive,
   downloadImageResult,
@@ -275,14 +290,18 @@ import {
   editImageStudioImages,
   getImageStudioCapabilities,
   type ImageStudioCapabilities,
+  type ImageStudioFailureKind,
   type ImageStudioGenerationResult,
+  ImageStudioRequestError,
 } from '@/api/imageStudio'
 import type { ApiKey } from '@/types'
 
 type StudioTab = 'generate' | 'edit'
 type DownloadState = 'idle' | 'preparing' | 'success' | 'failed'
+type StudioFailure = { kind: ImageStudioFailureKind; requestId?: string; retryAfterSeconds?: number }
 
 const { t } = useI18n()
+const appStore = useAppStore()
 const tabs: StudioTab[] = ['generate', 'edit']
 const activeTab = ref<StudioTab>('generate')
 const eligibleKeys = ref<ApiKey[]>([])
@@ -293,7 +312,7 @@ const loadingKeys = ref(true)
 const loadingCapabilities = ref(false)
 const capabilityError = ref(false)
 const submitting = ref(false)
-const generationError = ref(false)
+const generationFailure = ref<StudioFailure | null>(null)
 const results = ref<ImageStudioGenerationResult[]>([])
 const failedResultCount = ref(0)
 const generationId = ref(0)
@@ -302,7 +321,7 @@ const transferError = ref(false)
 const downloadState = reactive<Record<StudioTab, DownloadState>>({ generate: 'idle', edit: 'idle' })
 const editModelId = ref('')
 const editSubmitting = ref(false)
-const editError = ref(false)
+const editFailure = ref<StudioFailure | null>(null)
 const editResults = ref<ImageStudioGenerationResult[]>([])
 const editFailedResultCount = ref(0)
 const editGenerationId = ref(0)
@@ -310,6 +329,7 @@ const uploadError = ref('')
 const uploads = ref<Array<{ file: File; previewUrl: string }>>([])
 let capabilityRequest = 0
 let editRequest = 0
+const featureBlocked = ref(appStore.cachedPublicSettings?.image_studio_enabled === false)
 
 const form = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
 const editForm = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
@@ -318,12 +338,12 @@ const selectedModel = computed(() => capabilities.value?.models.find((model) => 
 const editModels = computed(() => capabilities.value?.models.filter((model) => model.operations.includes('edit')) || [])
 const editModel = computed(() => editModels.value.find((model) => model.id === editModelId.value))
 const canGenerate = computed(() => {
-  if (!selectedKey.value || !selectedModel.value || !form.prompt.trim()) return false
+  if (featureBlocked.value || !selectedKey.value || !selectedModel.value || !form.prompt.trim()) return false
   const count = selectedModel.value.parameters.n
   return !count || (Number.isInteger(form.n) && form.n >= count.min && form.n <= count.max)
 })
 const canEdit = computed(() => {
-  if (!selectedKey.value || !editModel.value || uploads.value.length === 0 || !editForm.prompt.trim()) return false
+  if (featureBlocked.value || !selectedKey.value || !editModel.value || uploads.value.length === 0 || !editForm.prompt.trim()) return false
   const count = editModel.value.parameters.n
   return !count || (Number.isInteger(editForm.n) && editForm.n >= count.min && editForm.n <= count.max)
 })
@@ -338,7 +358,7 @@ function replaceUploads(files: File[]) {
   uploads.value = files.map((file) => ({ file, previewUrl: URL.createObjectURL(file) }))
   editResults.value = []
   editFailedResultCount.value = 0
-  editError.value = false
+  editFailure.value = null
   downloadState.edit = 'idle'
 }
 
@@ -379,6 +399,24 @@ function downloadStateText(kind: StudioTab) {
   }
   const state = downloadState[kind]
   return state === 'idle' ? '' : t(keys[state])
+}
+
+function syncFeatureBlocked() {
+  if (appStore.cachedPublicSettings?.image_studio_enabled === false) featureBlocked.value = true
+}
+
+function failureFrom(error: unknown): StudioFailure {
+  if (error instanceof ImageStudioRequestError) {
+    return { kind: error.kind, requestId: error.requestId, retryAfterSeconds: error.retryAfterSeconds }
+  }
+  return { kind: 'unknown' }
+}
+
+function failureText(failure: StudioFailure) {
+  if (failure.kind === 'rateLimited') {
+    return t('imageStudio.errors.rateLimited', { seconds: failure.retryAfterSeconds ?? 60 })
+  }
+  return t(`imageStudio.errors.${failure.kind}`)
 }
 
 async function downloadResults(kind: StudioTab, availableResults: ImageStudioGenerationResult[], onlyIndex?: number) {
@@ -429,11 +467,12 @@ function resetEditModelValues() {
   uploadError.value = ''
   editResults.value = []
   editFailedResultCount.value = 0
-  editError.value = false
+  editFailure.value = null
   downloadState.edit = 'idle'
 }
 
 async function edit() {
+  syncFeatureBlocked()
   if (editSubmitting.value || !canEdit.value || !selectedKey.value || !editModel.value) return
   const request = ++editRequest
   const parameters = editModel.value.parameters
@@ -445,7 +484,7 @@ async function edit() {
   if (parameters.n) payload.n = editForm.n
 
   editSubmitting.value = true
-  editError.value = false
+  editFailure.value = null
   editResults.value = []
   editFailedResultCount.value = 0
   downloadState.edit = 'idle'
@@ -455,11 +494,12 @@ async function edit() {
     editResults.value = response.images
     editFailedResultCount.value = response.failedCount
     editGenerationId.value += 1
-    editError.value = response.images.length === 0
-  } catch {
-    if (request === editRequest) editError.value = true
+    if (response.images.length === 0) editFailure.value = { kind: 'unknown' }
+  } catch (error) {
+    if (request === editRequest) editFailure.value = failureFrom(error)
   } finally {
     if (request === editRequest) editSubmitting.value = false
+    syncFeatureBlocked()
   }
 }
 
@@ -472,11 +512,12 @@ function resetModelValues() {
   form.n = parameters?.n?.default || 1
   results.value = []
   failedResultCount.value = 0
-  generationError.value = false
+  generationFailure.value = null
   downloadState.generate = 'idle'
 }
 
 async function generate() {
+  syncFeatureBlocked()
   if (submitting.value || !canGenerate.value || !selectedKey.value || !selectedModel.value) return
   const parameters = selectedModel.value.parameters
   const payload: Record<string, string | number> = {
@@ -490,7 +531,7 @@ async function generate() {
   if (parameters.n) payload.n = form.n
 
   submitting.value = true
-  generationError.value = false
+  generationFailure.value = null
   results.value = []
   failedResultCount.value = 0
   downloadState.generate = 'idle'
@@ -503,15 +544,19 @@ async function generate() {
     results.value = response.images
     failedResultCount.value = response.failedCount
     generationId.value += 1
-    generationError.value = response.images.length === 0
-  } catch {
-    generationError.value = true
+    if (response.images.length === 0) generationFailure.value = { kind: 'unknown' }
+  } catch (error) {
+    generationFailure.value = failureFrom(error)
   } finally {
     submitting.value = false
+    syncFeatureBlocked()
   }
 }
 
 watch(selectedModelId, resetModelValues)
+watch(() => appStore.cachedPublicSettings?.image_studio_enabled, (enabled) => {
+  if (enabled === false) featureBlocked.value = true
+})
 watch(editModelId, () => {
   editRequest += 1
   editSubmitting.value = false

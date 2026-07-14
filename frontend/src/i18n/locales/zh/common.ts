@@ -459,6 +459,15 @@ export default {
     downloadSuccess: '下载已就绪',
     downloadFailed: '下载失败',
     downloadFilename: 'AI-生图结果',
+    featureDisabled: 'AI 生图已停用，无法提交新请求。',
+    errors: {
+      rateLimited: '请求过于频繁，请在 {seconds} 秒后手动重试。',
+      insufficientBalance: '账户余额不足，无法完成此请求。',
+      moderationRejected: '此请求因内容政策被拒绝。',
+      invalidKey: '此 API 密钥无效或已被撤销。',
+      unknown: '请求失败，请手动重试。',
+      requestId: '请求 ID：{requestId}',
+    },
     uploadErrors: {
       mime: '不支持此文件类型。',
       count: '选择的图像数量过多。',

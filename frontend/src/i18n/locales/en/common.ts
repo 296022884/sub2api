@@ -460,6 +460,15 @@ export default {
     downloadSuccess: 'Download ready',
     downloadFailed: 'Download failed',
     downloadFilename: 'image-studio-result',
+    featureDisabled: 'Image Studio has been disabled. New requests are blocked.',
+    errors: {
+      rateLimited: 'Too many requests. Try again in {seconds} seconds.',
+      insufficientBalance: 'Your balance is too low for this request.',
+      moderationRejected: 'The request was rejected by content policy.',
+      invalidKey: 'This API key is invalid or has been revoked.',
+      unknown: 'The request failed. Try again manually.',
+      requestId: 'Request ID: {requestId}',
+    },
     uploadErrors: {
       mime: 'This file type is not supported.',
       count: 'Too many images selected.',
