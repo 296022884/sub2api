@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { unzipSync } from 'fflate'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ImageStudioView from '../ImageStudioView.vue'
 
@@ -59,6 +60,18 @@ vi.mock('vue-i18n', async (importOriginal) => ({
   }),
 }))
 
+function mountStudio() {
+  return mount(ImageStudioView, {
+    global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+  })
+}
+
+async function mountReadyStudio() {
+  const wrapper = mountStudio()
+  await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+  return wrapper
+}
+
 describe('Image Studio workspace shell', () => {
   beforeEach(() => {
     Object.defineProperty(URL, 'createObjectURL', {
@@ -109,9 +122,7 @@ describe('Image Studio workspace shell', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('shows only Generate and Edit and selects Generate by default', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
+    const wrapper = mountStudio()
 
     const tabs = wrapper.findAll('[role="tab"]')
     expect(tabs.map((tab) => tab.text())).toEqual(['Generate', 'Edit'])
@@ -122,11 +133,7 @@ describe('Image Studio workspace shell', () => {
   })
 
   it('selects the first eligible key and renders only server-authored controls', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
 
     expect(wrapper.text()).toContain('Primary images')
     expect(wrapper.text()).toContain('...1234')
@@ -139,10 +146,7 @@ describe('Image Studio workspace shell', () => {
   })
 
   it('submits only supported fields with the selected key and renders base64 and URL images', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
@@ -175,10 +179,7 @@ describe('Image Studio workspace shell', () => {
   })
 
   it('keeps successful images from a partial response and clears them when the key changes', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
 
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
@@ -197,10 +198,7 @@ describe('Image Studio workspace shell', () => {
   })
 
   it('validates selected edit images against every server-authored upload limit', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
     await wrapper.findAll('[role="tab"]')[1].trigger('click')
 
     const input = wrapper.get('[data-testid="edit-file-input"]')
@@ -231,10 +229,7 @@ describe('Image Studio workspace shell', () => {
   })
 
   it('accepts dropped images and submits supported edit fields as multipart with the selected key', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
     await wrapper.findAll('[role="tab"]')[1].trigger('click')
 
     const source = new File(['source'], 'source.png', { type: 'image/png' })
@@ -266,10 +261,7 @@ describe('Image Studio workspace shell', () => {
 
   it('transfers a generated result into Edit as an in-memory file', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
 
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1n' }],
@@ -291,10 +283,7 @@ describe('Image Studio workspace shell', () => {
 
   it('downloads an individual result with a safe localized filename and success state', async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const wrapper = await mountReadyStudio()
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'aW1n' }] }), { status: 200 }))
     await wrapper.get('textarea').setValue('A downloadable image')
     await wrapper.get('form').trigger('submit')
@@ -312,11 +301,8 @@ describe('Image Studio workspace shell', () => {
   it('shows preparing and failure states while downloading all results', async () => {
     let resolveRemote: (response: Response) => void = () => {}
     const remoteResponse = new Promise<Response>((resolve) => { resolveRemote = resolve })
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
-    })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const wrapper = await mountReadyStudio()
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1n' }, { url: 'https://images.example/two.png' }],
     }), { status: 200 }))
@@ -327,8 +313,19 @@ describe('Image Studio workspace shell', () => {
 
     await wrapper.get('[data-testid="download-all"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('Preparing download'))
-    resolveRemote(new Response(new Blob(['remote'], { type: 'image/png' }), { status: 200 }))
+    resolveRemote(new Response('remote', { status: 200, headers: { 'Content-Type': 'image/png' } }))
     await vi.waitFor(() => expect(wrapper.text()).toContain('Download ready'))
+    expect(click).toHaveBeenCalledOnce()
+    const zipBlob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0] as Blob
+    expect(zipBlob.type).toBe('application/zip')
+    const zipBytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error)
+      reader.onload = () => resolve(reader.result as ArrayBuffer)
+      reader.readAsArrayBuffer(zipBlob)
+    })
+    const archive = unzipSync(new Uint8Array(zipBytes))
+    expect(Object.keys(archive).sort()).toEqual(['image-studio-result-1.png', 'image-studio-result-2.png'])
 
     vi.mocked(fetch).mockRejectedValueOnce(new Error('secret upstream response'))
     await wrapper.get('[data-testid="download-all"]').trigger('click')
@@ -336,11 +333,33 @@ describe('Image Studio workspace shell', () => {
     expect(wrapper.text()).not.toContain('secret upstream response')
   })
 
-  it('keeps valid uploads on validation failure and revokes preview URLs on replacement and unmount', async () => {
-    const wrapper = mount(ImageStudioView, {
-      global: { stubs: { AppLayout: { template: '<div><slot /></div>' } } },
+  it('prevents the selected key changing while an edit request settles', async () => {
+    let resolveEdit: (response: Response) => void = () => {}
+    const editResponse = new Promise<Response>((resolve) => { resolveEdit = resolve })
+    const wrapper = await mountReadyStudio()
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    const input = wrapper.get('[data-testid="edit-file-input"]')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['source'], 'source.png', { type: 'image/png' })],
     })
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    await input.trigger('change')
+    await wrapper.get('[data-testid="edit-form"] textarea').setValue('Change it')
+    vi.mocked(fetch).mockReturnValueOnce(editResponse)
+    await wrapper.get('[data-testid="edit-form"]').trigger('submit')
+
+    await wrapper.findAll('[role="tab"]')[0].trigger('click')
+    expect(wrapper.get('#image-studio-key').attributes('disabled')).toBeDefined()
+    expect((wrapper.get('#image-studio-key').element as HTMLSelectElement).value).toBe('7')
+    resolveEdit(new Response(JSON.stringify({ data: [{ b64_json: 'c3RhbGU=' }] }), { status: 200 }))
+
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).not.toContain('Editing image'))
+    expect(wrapper.findAll('[data-testid="edited-image"]')).toHaveLength(1)
+  })
+
+  it('keeps valid uploads on validation failure and revokes preview URLs on replacement and unmount', async () => {
+    const wrapper = await mountReadyStudio()
     await wrapper.findAll('[role="tab"]')[1].trigger('click')
     const input = wrapper.get('[data-testid="edit-file-input"]')
     const selectFiles = async (files: File[]) => {

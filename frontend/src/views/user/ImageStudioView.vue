@@ -39,7 +39,7 @@
                   id="image-studio-key"
                   v-model.number="selectedKeyId"
                   class="input w-full"
-                  :disabled="loadingKeys || submitting || eligibleKeys.length === 0"
+                  :disabled="loadingKeys || submitting || editSubmitting || eligibleKeys.length === 0"
                 >
                   <option v-for="key in eligibleKeys" :key="key.id" :value="key.id">
                     {{ key.name }} (...{{ key.key.slice(-4) }})
@@ -155,7 +155,7 @@
                   id="image-studio-edit-key"
                   v-model.number="selectedKeyId"
                   class="input w-full"
-                  :disabled="loadingKeys || editSubmitting || eligibleKeys.length === 0"
+                  :disabled="loadingKeys || submitting || editSubmitting || eligibleKeys.length === 0"
                 >
                   <option v-for="key in eligibleKeys" :key="key.id" :value="key.id">
                     {{ key.name }} (...{{ key.key.slice(-4) }})
@@ -265,6 +265,12 @@ import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import { keysAPI } from '@/api/keys'
 import {
+  downloadImageArchive,
+  downloadImageResult,
+  imageResultToFile,
+  validateImageUploads,
+} from '@/utils/imageStudioFiles'
+import {
   generateImageStudioImages,
   editImageStudioImages,
   getImageStudioCapabilities,
@@ -303,6 +309,7 @@ const editGenerationId = ref(0)
 const uploadError = ref('')
 const uploads = ref<Array<{ file: File; previewUrl: string }>>([])
 let capabilityRequest = 0
+let editRequest = 0
 
 const form = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
 const editForm = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
@@ -337,11 +344,9 @@ function replaceUploads(files: File[]) {
 
 function validateUploads(files: File[]): string {
   const limits = capabilities.value?.uploads
-  if (!limits || files.some((file) => !limits.mime_types.includes(file.type))) return t('imageStudio.uploadErrors.mime')
-  if (files.length > limits.max_files) return t('imageStudio.uploadErrors.count')
-  if (files.some((file) => file.size > limits.max_file_bytes)) return t('imageStudio.uploadErrors.fileSize')
-  if (files.reduce((total, file) => total + file.size, 0) > limits.max_total_bytes) return t('imageStudio.uploadErrors.totalSize')
-  return ''
+  if (!limits) return t('imageStudio.uploadErrors.mime')
+  const error = validateImageUploads(files, limits)
+  return error ? t(`imageStudio.uploadErrors.${error}`) : ''
 }
 
 function acceptUploads(files: File[]) {
@@ -366,24 +371,6 @@ function removeUpload(index: number) {
   uploadError.value = ''
 }
 
-async function resultToBlob(result: ImageStudioGenerationResult): Promise<Blob> {
-  if (result.src.startsWith('data:')) {
-    const match = /^data:([^;,]+);base64,(.+)$/i.exec(result.src)
-    if (!match) throw new Error('Invalid generated image')
-    const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0))
-    return new Blob([bytes], { type: match[1] })
-  }
-  const response = await fetch(result.src)
-  if (!response.ok) throw new Error('Generated image unavailable')
-  return response.blob()
-}
-
-async function resultToFile(result: ImageStudioGenerationResult): Promise<File> {
-  const blob = await resultToBlob(result)
-  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'
-  return new File([blob], `${t('imageStudio.transferFilename')}.${extension}`, { type: blob.type || 'image/png' })
-}
-
 function downloadStateText(kind: StudioTab) {
   const keys: Record<Exclude<DownloadState, 'idle'>, string> = {
     preparing: 'imageStudio.downloadPreparing',
@@ -394,38 +381,14 @@ function downloadStateText(kind: StudioTab) {
   return state === 'idle' ? '' : t(keys[state])
 }
 
-function downloadFilename(blob: Blob, index: number) {
-  const extension = blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png'
-  const prefix = t('imageStudio.downloadFilename')
-    .replace(/[\\/:*?"<>|]/g, '-')
-    .split('')
-    .filter((character) => character.charCodeAt(0) >= 32)
-    .join('')
-    .replace(/^[. ]+|[. ]+$/g, '') || 'image-studio-result'
-  return `${prefix}-${index + 1}.${extension}`
-}
-
-async function saveResult(result: ImageStudioGenerationResult, index: number) {
-  const blob = await resultToBlob(result)
-  const objectUrl = URL.createObjectURL(blob)
-  try {
-    const anchor = document.createElement('a')
-    anchor.href = objectUrl
-    anchor.download = downloadFilename(blob, index)
-    anchor.click()
-  } finally {
-    URL.revokeObjectURL(objectUrl)
-  }
-}
-
 async function downloadResults(kind: StudioTab, availableResults: ImageStudioGenerationResult[], onlyIndex?: number) {
   if (downloadState[kind] === 'preparing') return
   downloadState[kind] = 'preparing'
   try {
     if (onlyIndex !== undefined) {
-      await saveResult(availableResults[onlyIndex], onlyIndex)
+      await downloadImageResult(availableResults[onlyIndex], t('imageStudio.downloadFilename'), onlyIndex)
     } else {
-      for (let index = 0; index < availableResults.length; index += 1) await saveResult(availableResults[index], index)
+      await downloadImageArchive(availableResults, t('imageStudio.downloadFilename'))
     }
     downloadState[kind] = 'success'
   } catch {
@@ -438,7 +401,7 @@ async function transferResultToEdit(result: ImageStudioGenerationResult, index: 
   transferringResult.value = index
   transferError.value = false
   try {
-    const file = await resultToFile(result)
+    const file = await imageResultToFile(result, t('imageStudio.transferFilename'))
     const validationError = validateUploads([file])
     if (validationError) {
       uploadError.value = validationError
@@ -472,6 +435,7 @@ function resetEditModelValues() {
 
 async function edit() {
   if (editSubmitting.value || !canEdit.value || !selectedKey.value || !editModel.value) return
+  const request = ++editRequest
   const parameters = editModel.value.parameters
   const payload: Record<string, string | number> = { model: editModel.value.id, prompt: editForm.prompt.trim() }
   if (parameters.size) payload.size = editForm.size
@@ -487,14 +451,15 @@ async function edit() {
   downloadState.edit = 'idle'
   try {
     const response = await editImageStudioImages(selectedKey.value.key, uploads.value.map(({ file }) => file), payload, parameters.output_format ? editForm.outputFormat : 'png')
+    if (request !== editRequest) return
     editResults.value = response.images
     editFailedResultCount.value = response.failedCount
     editGenerationId.value += 1
     editError.value = response.images.length === 0
   } catch {
-    editError.value = true
+    if (request === editRequest) editError.value = true
   } finally {
-    editSubmitting.value = false
+    if (request === editRequest) editSubmitting.value = false
   }
 }
 
@@ -547,9 +512,15 @@ async function generate() {
 }
 
 watch(selectedModelId, resetModelValues)
-watch(editModelId, resetEditModelValues)
+watch(editModelId, () => {
+  editRequest += 1
+  editSubmitting.value = false
+  resetEditModelValues()
+})
 
 watch(selectedKeyId, async () => {
+  editRequest += 1
+  editSubmitting.value = false
   const request = ++capabilityRequest
   capabilities.value = null
   selectedModelId.value = ''
@@ -588,5 +559,8 @@ onMounted(async () => {
   }
 })
 
-onBeforeUnmount(clearUploads)
+onBeforeUnmount(() => {
+  editRequest += 1
+  clearUploads()
+})
 </script>

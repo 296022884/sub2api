@@ -92,6 +92,30 @@ export interface ImageStudioGenerationResponse {
   failedCount: number
 }
 
+async function normalizeImageResponse(
+  response: Response,
+  outputFormat: string,
+  operation: 'generation' | 'editing',
+): Promise<ImageStudioGenerationResponse> {
+  if (!response.ok) throw new Error(`Image ${operation} failed`)
+
+  const body = await response.json() as { data?: Array<{ b64_json?: unknown; url?: unknown }> }
+  if (!Array.isArray(body.data)) throw new Error(`Invalid image ${operation} response`)
+  const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
+  const images: ImageStudioGenerationResult[] = []
+  let failedCount = 0
+  for (const item of body.data) {
+    if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+      images.push({ src: `data:${mime};base64,${item.b64_json}` })
+    } else if (typeof item.url === 'string' && /^https?:\/\//i.test(item.url)) {
+      images.push({ src: item.url })
+    } else {
+      failedCount += 1
+    }
+  }
+  return { images, failedCount }
+}
+
 export async function generateImageStudioImages(
   apiKey: string,
   payload: Record<string, string | number>,
@@ -105,25 +129,7 @@ export async function generateImageStudioImages(
     },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) throw new Error('Image generation failed')
-
-  const body = await response.json() as { data?: Array<{ b64_json?: unknown; url?: unknown }> }
-  if (!Array.isArray(body.data)) throw new Error('Invalid image generation response')
-  const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
-  const images: ImageStudioGenerationResult[] = []
-  let failedCount = 0
-  for (const item of body.data) {
-    if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
-      images.push({ src: `data:${mime};base64,${item.b64_json}` })
-      continue
-    }
-    if (typeof item.url === 'string' && /^https?:\/\//i.test(item.url)) {
-      images.push({ src: item.url })
-      continue
-    }
-    failedCount += 1
-  }
-  return { images, failedCount }
+  return normalizeImageResponse(response, outputFormat, 'generation')
 }
 
 export async function editImageStudioImages(
@@ -141,21 +147,5 @@ export async function editImageStudioImages(
     headers: { Authorization: `Bearer ${apiKey}` },
     body,
   })
-  if (!response.ok) throw new Error('Image editing failed')
-
-  const responseBody = await response.json() as { data?: Array<{ b64_json?: unknown; url?: unknown }> }
-  if (!Array.isArray(responseBody.data)) throw new Error('Invalid image editing response')
-  const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
-  const images: ImageStudioGenerationResult[] = []
-  let failedCount = 0
-  for (const item of responseBody.data) {
-    if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
-      images.push({ src: `data:${mime};base64,${item.b64_json}` })
-    } else if (typeof item.url === 'string' && /^https?:\/\//i.test(item.url)) {
-      images.push({ src: item.url })
-    } else {
-      failedCount += 1
-    }
-  }
-  return { images, failedCount }
+  return normalizeImageResponse(response, outputFormat, 'editing')
 }
