@@ -82,6 +82,47 @@ func TestSettingHandler_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t 
 	require.True(t, resp.Data.ForceEmailOnThirdPartySignup)
 }
 
+func TestSettingHandler_GetPublicSettings_ImageStudioIsStrictlyOptIn(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		include bool
+		want    bool
+	}{
+		{name: "enabled", value: "true", include: true, want: true},
+		{name: "disabled", value: "false", include: true, want: false},
+		{name: "malformed", value: "TRUE", include: true, want: false},
+		{name: "missing", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			values := map[string]string{}
+			if tt.include {
+				values[service.SettingKeyImageStudioEnabled] = tt.value
+			}
+			h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+				values: values,
+			}, &config.Config{}), "test-version")
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/public", nil)
+			h.GetPublicSettings(c)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var resp struct {
+				Data struct {
+					ImageStudioEnabled bool `json:"image_studio_enabled"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+			require.Equal(t, tt.want, resp.Data.ImageStudioEnabled)
+		})
+	}
+}
+
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{

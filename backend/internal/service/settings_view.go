@@ -178,6 +178,7 @@ type SystemSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+	ImageStudioEnabled       bool `json:"image_studio_enabled"`
 
 	// Claude Code version check
 	MinClaudeCodeVersion string
@@ -323,6 +324,7 @@ type PublicSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+	ImageStudioEnabled       bool `json:"image_studio_enabled"`
 
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`

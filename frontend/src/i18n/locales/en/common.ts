@@ -151,6 +151,7 @@ export default {
     announcements: 'Announcements',
     apiKeys: 'API Keys',
     batchImage: 'Batch Images',
+    imageStudio: 'AI Images',
     usage: 'Usage',
     redeem: 'Redeem',
     affiliate: 'Affiliate Rebates',
@@ -411,6 +412,17 @@ export default {
     invalidResetLinkHint: 'This password reset link is invalid or has expired. Please request a new one.',
     requestNewResetLink: 'Request New Reset Link',
     invalidOrExpiredToken: 'The password reset link is invalid or has expired. Please request a new one.'
+  },
+
+  imageStudio: {
+    title: 'Image Studio',
+    tabs: {
+      generate: 'Generate',
+      edit: 'Edit',
+    },
+    generateDescription: 'Image generation controls will appear here.',
+    editDescription: 'Image editing controls will appear here.',
+    keyRequired: 'Add an active OpenAI API key in a group that allows image generation to use Image Studio.',
   },
 
   // Dashboard

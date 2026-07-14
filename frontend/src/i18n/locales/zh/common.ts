@@ -151,6 +151,7 @@ export default {
     announcements: '公告',
     apiKeys: 'API 密钥',
     batchImage: '批量生图',
+    imageStudio: 'AI 生图',
     usage: '使用记录',
     redeem: '兑换',
     affiliate: '邀请返利',
@@ -410,6 +411,17 @@ export default {
     invalidResetLinkHint: '此密码重置链接无效或已过期。请重新请求一个新链接。',
     requestNewResetLink: '请求新的重置链接',
     invalidOrExpiredToken: '密码重置链接无效或已过期。请重新请求一个新链接。'
+  },
+
+  imageStudio: {
+    title: 'AI 生图',
+    tabs: {
+      generate: '生成',
+      edit: '编辑',
+    },
+    generateDescription: '图像生成控件将在此显示。',
+    editDescription: '图像编辑控件将在此显示。',
+    keyRequired: '请添加一个启用图像生成的 OpenAI 分组中的有效 API 密钥后再使用 AI 生图。',
   },
 
   // Dashboard

@@ -30,6 +30,12 @@ export default {
           enabled: 'Enable Available Channels',
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
         },
+        imageStudio: {
+          title: 'Image Studio',
+          description: 'Allow eligible OpenAI API key users to open the Image Studio workspace. Disabled by default.',
+          enabled: 'Enable Image Studio',
+          enabledHint: 'When off, navigation is hidden and direct workspace access redirects to the dashboard.',
+        },
         riskControl: {
           title: 'Risk Control',
           description: 'Enable the content moderation menu and gateway audit entry point. Disabled by default.',

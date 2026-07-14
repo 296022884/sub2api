@@ -298,6 +298,7 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+	ImageStudioEnabled       *bool `json:"image_studio_enabled"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -1505,6 +1506,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AvailableChannelsEnabled
 		}(),
+		ImageStudioEnabled: func() bool {
+			if req.ImageStudioEnabled != nil {
+				return *req.ImageStudioEnabled
+			}
+			return previousSettings.ImageStudioEnabled
+		}(),
 		AffiliateEnabled: func() bool {
 			if req.AffiliateEnabled != nil {
 				return *req.AffiliateEnabled
@@ -1880,6 +1887,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+		ImageStudioEnabled:       updatedSettings.ImageStudioEnabled,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 

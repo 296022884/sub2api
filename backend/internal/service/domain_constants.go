@@ -367,6 +367,10 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyImageStudioEnabled gates the authenticated Image Studio workspace.
+	// It is opt-in and defaults to disabled.
+	SettingKeyImageStudioEnabled = "image_studio_enabled"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================
