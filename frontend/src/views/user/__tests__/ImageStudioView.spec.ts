@@ -173,7 +173,7 @@ describe('Image Studio workspace shell', () => {
 
     await vi.waitFor(() => expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(2))
     const generationCall = fetchMock.mock.calls[1]
-    expect(new URL(String(generationCall?.[0])).pathname).toBe('/v1/images/generations')
+    expect(new URL(String(generationCall?.[0]), window.location.origin).pathname).toBe('/v1/images/generations')
     expect(generationCall?.[1]?.headers).toEqual({
       Authorization: 'Bearer sk-first-1234',
       'Content-Type': 'application/json',
@@ -347,7 +347,7 @@ describe('Image Studio workspace shell', () => {
 
     await vi.waitFor(() => expect(wrapper.findAll('[data-testid="edited-image"]')).toHaveLength(1))
     const editCall = vi.mocked(fetch).mock.calls[1]
-    expect(new URL(String(editCall?.[0])).pathname).toBe('/v1/images/edits')
+    expect(new URL(String(editCall?.[0]), window.location.origin).pathname).toBe('/v1/images/edits')
     expect(editCall?.[1]?.headers).toEqual({ Authorization: 'Bearer sk-first-1234' })
     const body = editCall?.[1]?.body as FormData
     expect(body).toBeInstanceOf(FormData)
