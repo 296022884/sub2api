@@ -4,12 +4,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ImageStudioView from '../ImageStudioView.vue'
 
 const { appStore, listKeys } = vi.hoisted(() => ({
-  appStore: { cachedPublicSettings: { image_studio_enabled: true } },
+  appStore: {
+    cachedPublicSettings: { image_studio_enabled: true },
+    fetchPublicSettings: vi.fn(),
+  },
   listKeys: vi.fn(),
 }))
 
 vi.mock('@/api/keys', () => ({ keysAPI: { list: listKeys } }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => appStore }))
+
+const capabilitiesFixture = {
+  operations: ['generate', 'edit'],
+  models: [{
+    id: 'gpt-image-2',
+    operations: ['generate', 'edit'],
+    parameters: {
+      size: { values: ['auto', '1024x1024'], default: 'auto' },
+      quality: { values: ['auto', 'high'], default: 'auto' },
+      output_format: { values: ['png', 'webp'], default: 'png' },
+      n: { min: 1, max: 2, default: 1 },
+    },
+  }],
+  uploads: {
+    mime_types: ['image/png', 'image/jpeg'],
+    max_files: 2,
+    max_file_bytes: 8,
+    max_total_bytes: 12,
+  },
+}
 
 vi.mock('vue-i18n', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-i18n')>()),
@@ -86,6 +109,7 @@ async function mountReadyStudio() {
 describe('Image Studio workspace shell', () => {
   beforeEach(() => {
     appStore.cachedPublicSettings = { image_studio_enabled: true }
+    appStore.fetchPublicSettings.mockImplementation(async () => appStore.cachedPublicSettings)
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn((file: File) => `blob:${file.name}`),
@@ -110,25 +134,7 @@ describe('Image Studio workspace shell', () => {
       ],
       pages: 1,
     })
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      operations: ['generate', 'edit'],
-      models: [{
-        id: 'gpt-image-2',
-        operations: ['generate', 'edit'],
-        parameters: {
-          size: { values: ['auto', '1024x1024'], default: 'auto' },
-          quality: { values: ['auto', 'high'], default: 'auto' },
-          output_format: { values: ['png', 'webp'], default: 'png' },
-          n: { min: 1, max: 2, default: 1 },
-        },
-      }],
-      uploads: {
-        mime_types: ['image/png', 'image/jpeg'],
-        max_files: 2,
-        max_file_bytes: 8,
-        max_total_bytes: 12,
-      },
-    }), { status: 200 })))
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(JSON.stringify(capabilitiesFixture), { status: 200 })))
   })
 
   afterEach(() => vi.unstubAllGlobals())
@@ -239,7 +245,8 @@ describe('Image Studio workspace shell', () => {
     expect(clipboardWrite).not.toHaveBeenCalled()
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain('secret')
     expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain('secret')
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+    const submissionCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/v1/images/generations'))
+    expect(submissionCalls).toHaveLength(1)
   })
 
   it('accepts only one submission while a request is pending and never retries a failure', async () => {
@@ -286,6 +293,9 @@ describe('Image Studio workspace shell', () => {
     const generationResponse = new Promise<Response>((resolve) => { resolveGeneration = resolve })
     const wrapper = await mountReadyStudio()
     vi.mocked(fetch).mockReturnValueOnce(generationResponse)
+    appStore.fetchPublicSettings
+      .mockResolvedValueOnce({ image_studio_enabled: true })
+      .mockResolvedValueOnce({ image_studio_enabled: false })
     await wrapper.get('textarea').setValue('Finish this request')
     await wrapper.get('form').trigger('submit')
 
@@ -296,6 +306,49 @@ describe('Image Studio workspace shell', () => {
     expect(wrapper.text()).toContain('Image Studio has been disabled. New requests are blocked.')
     await wrapper.get('form').trigger('submit')
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['runtime disablement', { image_studio_enabled: false }],
+    ['settings refresh failure', null],
+  ])('force-refreshes the feature flag and blocks a new submission after %s', async (_case, settings) => {
+    const wrapper = await mountReadyStudio()
+    appStore.fetchPublicSettings.mockResolvedValueOnce(settings)
+    await wrapper.get('textarea').setValue('Do not submit this')
+
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Image Studio has been disabled. New requests are blocked.'))
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledWith(true)
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes an invalid selected key while retaining the localized failure', async () => {
+    const wrapper = await mountReadyStudio()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { code: 'invalid_api_key' },
+    }), { status: 401 }))
+    await wrapper.get('textarea').setValue('Rejected key')
+
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('This API key is invalid or has been revoked.'))
+    expect(wrapper.findAll('#image-studio-key option').map((option) => option.text())).not.toContain('Primary images (...1234)')
+    expect((wrapper.get('#image-studio-key').element as HTMLSelectElement).value).toBe('8')
+    expect(wrapper.text()).not.toContain('sk-first-1234')
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="model-select"]').exists()).toBe(true))
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'bmV4dC1rZXk=' }] }), { status: 200 }))
+    await wrapper.get('textarea').setValue('Use the next key')
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(1))
+    const generationCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/v1/images/generations'))
+    expect(generationCalls).toHaveLength(2)
+    expect(generationCalls[1]?.[1]?.headers).toEqual({
+      Authorization: 'Bearer sk-second-5678',
+      'Content-Type': 'application/json',
+    })
   })
 
   it('validates selected edit images against every server-authored upload limit', async () => {

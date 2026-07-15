@@ -261,7 +261,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import CapabilitySelect from '@/components/image-studio/CapabilitySelect.vue'
@@ -319,6 +319,7 @@ const uploadError = ref('')
 const uploads = ref<Array<{ file: File; previewUrl: string }>>([])
 let capabilityRequest = 0
 let editRequest = 0
+let replacingInvalidKey = false
 const featureBlocked = ref(appStore.cachedPublicSettings?.image_studio_enabled === false)
 
 const form = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
@@ -392,7 +393,14 @@ function downloadStateText(kind: StudioTab) {
 }
 
 function syncFeatureBlocked() {
-  if (appStore.cachedPublicSettings?.image_studio_enabled === false) featureBlocked.value = true
+  const enabled = appStore.cachedPublicSettings?.image_studio_enabled
+  if (enabled !== undefined) featureBlocked.value = enabled !== true
+}
+
+async function refreshFeatureBlocked() {
+  const settings = await appStore.fetchPublicSettings(true)
+  featureBlocked.value = settings?.image_studio_enabled !== true
+  return featureBlocked.value
 }
 
 function failureFrom(error: unknown): ImageStudioFailure {
@@ -400,6 +408,15 @@ function failureFrom(error: unknown): ImageStudioFailure {
     return { kind: error.kind, requestId: error.requestId, retryAfterSeconds: error.retryAfterSeconds }
   }
   return { kind: 'unknown' }
+}
+
+async function removeSelectedKeyAfterInvalidFailure(failure: ImageStudioFailure) {
+  if (failure.kind !== 'invalidKey' || selectedKeyId.value === null) return false
+  replacingInvalidKey = true
+  eligibleKeys.value = eligibleKeys.value.filter((key) => key.id !== selectedKeyId.value)
+  selectedKeyId.value = eligibleKeys.value[0]?.id ?? null
+  await nextTick()
+  return true
 }
 
 async function downloadResults(kind: StudioTab, availableResults: ImageStudioGenerationResult[], onlyIndex?: number) {
@@ -450,7 +467,7 @@ function resetEditModelValues() {
   uploadError.value = ''
   editResults.value = []
   editFailedResultCount.value = 0
-  editFailure.value = null
+  if (!replacingInvalidKey) editFailure.value = null
   downloadState.edit = 'idle'
 }
 
@@ -471,7 +488,10 @@ async function edit() {
   editResults.value = []
   editFailedResultCount.value = 0
   downloadState.edit = 'idle'
+  let submitted = false
   try {
+    if (await refreshFeatureBlocked()) return
+    submitted = true
     const response = await editImageStudioImages(selectedKey.value.key, uploads.value.map(({ file }) => file), payload, parameters.output_format ? editForm.outputFormat : 'png')
     if (request !== editRequest) return
     editResults.value = response.images
@@ -479,10 +499,14 @@ async function edit() {
     editGenerationId.value += 1
     if (response.images.length === 0) editFailure.value = { kind: 'unknown' }
   } catch (error) {
-    if (request === editRequest) editFailure.value = failureFrom(error)
+    if (request === editRequest) {
+      const failure = failureFrom(error)
+      await removeSelectedKeyAfterInvalidFailure(failure)
+      editFailure.value = failure
+    }
   } finally {
     if (request === editRequest) editSubmitting.value = false
-    syncFeatureBlocked()
+    if (submitted) await refreshFeatureBlocked()
   }
 }
 
@@ -495,7 +519,7 @@ function resetModelValues() {
   form.n = parameters?.n?.default || 1
   results.value = []
   failedResultCount.value = 0
-  generationFailure.value = null
+  if (!replacingInvalidKey) generationFailure.value = null
   downloadState.generate = 'idle'
 }
 
@@ -518,7 +542,10 @@ async function generate() {
   results.value = []
   failedResultCount.value = 0
   downloadState.generate = 'idle'
+  let submitted = false
   try {
+    if (await refreshFeatureBlocked()) return
+    submitted = true
     const response = await generateImageStudioImages(
       selectedKey.value.key,
       payload,
@@ -529,16 +556,18 @@ async function generate() {
     generationId.value += 1
     if (response.images.length === 0) generationFailure.value = { kind: 'unknown' }
   } catch (error) {
-    generationFailure.value = failureFrom(error)
+    const failure = failureFrom(error)
+    await removeSelectedKeyAfterInvalidFailure(failure)
+    generationFailure.value = failure
   } finally {
     submitting.value = false
-    syncFeatureBlocked()
+    if (submitted) await refreshFeatureBlocked()
   }
 }
 
 watch(selectedModelId, resetModelValues)
 watch(() => appStore.cachedPublicSettings?.image_studio_enabled, (enabled) => {
-  if (enabled === false) featureBlocked.value = true
+  featureBlocked.value = enabled !== true
 })
 watch(editModelId, () => {
   editRequest += 1
@@ -566,6 +595,8 @@ watch(selectedKeyId, async () => {
     if (request === capabilityRequest) capabilityError.value = true
   } finally {
     if (request === capabilityRequest) loadingCapabilities.value = false
+    await nextTick()
+    replacingInvalidKey = false
   }
 })
 
