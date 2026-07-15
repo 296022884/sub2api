@@ -40,22 +40,12 @@ type imageStudioCapabilitiesResponse struct {
 }
 
 var imageStudioOpenAIModels = []imageStudioModelCapability{
-	newImageStudioOpenAIModel("gpt-image-2", []string{"generate", "edit"}, gptImage2StudioSizes),
-}
-
-var gptImage2StudioSizes = []string{"auto", "1024x1024", "1536x1024", "1024x1536", "2048x1152", "2048x2048"}
-
-// Keep the advertised preflight limit at or below the gateway's multipart
-// upload-part reader limit so accepted files cannot be truncated in transit.
-const imageStudioMaxUploadPartBytes = 20 * 1024 * 1024
-
-func newImageStudioOpenAIModel(id string, operations []string, sizes []string) imageStudioModelCapability {
-	return imageStudioModelCapability{
-		ID:         id,
-		Operations: operations,
+	{
+		ID:         "gpt-image-2",
+		Operations: []string{"generate", "edit"},
 		Parameters: imageStudioParameters{
 			Size: imageStudioEnumCapability{
-				Values:  sizes,
+				Values:  []string{"auto", "1024x1024", "1536x1024", "1024x1536", "2048x1152", "2048x2048"},
 				Default: "auto",
 			},
 			Quality: imageStudioEnumCapability{
@@ -67,8 +57,12 @@ func newImageStudioOpenAIModel(id string, operations []string, sizes []string) i
 				Default: "png",
 			},
 		},
-	}
+	},
 }
+
+// Keep the advertised preflight limit at or below the gateway's multipart
+// upload-part reader limit so accepted files cannot be truncated in transit.
+const imageStudioMaxUploadPartBytes = 20 * 1024 * 1024
 
 // ImageCapabilities returns the fail-closed Image Studio contract for the
 // authenticated OpenAI key. It never serializes the key itself.
