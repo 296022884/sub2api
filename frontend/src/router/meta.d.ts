@@ -54,6 +54,11 @@ declare module 'vue-router' {
      * @default false
      */
     requiresRiskControl?: boolean
+
+    /**
+     * Whether this route requires Image Studio to be enabled and an eligible key
+     * @default false
+     */
     requiresImageStudio?: boolean
 
     /**
