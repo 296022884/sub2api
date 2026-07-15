@@ -14,18 +14,10 @@ type imageStudioEnumCapability struct {
 	Default string   `json:"default"`
 }
 
-type imageStudioIntegerCapability struct {
-	Min     int `json:"min"`
-	Max     int `json:"max"`
-	Default int `json:"default"`
-}
-
 type imageStudioParameters struct {
-	Size         imageStudioEnumCapability    `json:"size"`
-	Quality      imageStudioEnumCapability    `json:"quality"`
-	Background   imageStudioEnumCapability    `json:"background"`
-	OutputFormat imageStudioEnumCapability    `json:"output_format"`
-	N            imageStudioIntegerCapability `json:"n"`
+	Size         imageStudioEnumCapability `json:"size"`
+	Quality      imageStudioEnumCapability `json:"quality"`
+	OutputFormat imageStudioEnumCapability `json:"output_format"`
 }
 
 type imageStudioModelCapability struct {
@@ -76,15 +68,10 @@ func newImageStudioOpenAIModel(id string, operations []string, sizes []string) i
 				Values:  []string{"auto", "low", "medium", "high"},
 				Default: "auto",
 			},
-			Background: imageStudioEnumCapability{
-				Values:  []string{"auto", "opaque", "transparent"},
-				Default: "auto",
-			},
 			OutputFormat: imageStudioEnumCapability{
 				Values:  []string{"png", "jpeg", "webp"},
 				Default: "png",
 			},
-			N: imageStudioIntegerCapability{Min: 1, Max: 10, Default: 1},
 		},
 	}
 }
@@ -137,9 +124,9 @@ func (h *OpenAIGatewayHandler) ImageCapabilities(c *gin.Context) {
 		Models:     models,
 		Uploads: imageStudioUploadCapability{
 			MIMETypes:     []string{"image/png", "image/jpeg", "image/webp"},
-			MaxFiles:      16,
+			MaxFiles:      1,
 			MaxFileBytes:  imageStudioMaxUploadPartBytes,
-			MaxTotalBytes: 50 * 1024 * 1024,
+			MaxTotalBytes: imageStudioMaxUploadPartBytes,
 		},
 	})
 }

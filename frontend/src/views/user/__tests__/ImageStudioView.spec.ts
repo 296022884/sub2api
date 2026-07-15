@@ -23,7 +23,6 @@ const capabilitiesFixture = {
       size: { values: ['auto', '1024x1024'], default: 'auto' },
       quality: { values: ['auto', 'high'], default: 'auto' },
       output_format: { values: ['png', 'webp'], default: 'png' },
-      n: { min: 1, max: 2, default: 1 },
     },
   }],
   uploads: {
@@ -161,6 +160,7 @@ describe('Image Studio workspace shell', () => {
     expect(wrapper.find('[data-testid="quality-select"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="background-select"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="output-format-select"]').exists()).toBe(true)
+    expect(wrapper.find('#image-studio-count').exists()).toBe(false)
   })
 
   it('submits only supported fields with the selected key and renders base64 and URL images', async () => {
@@ -190,7 +190,6 @@ describe('Image Studio workspace shell', () => {
       size: 'auto',
       quality: 'auto',
       output_format: 'png',
-      n: 1,
     })
     expect(wrapper.findAll('[data-testid="generated-image"]')[0].attributes('src')).toBe('data:image/png;base64,aW1hZ2UtYnl0ZXM=')
     expect(wrapper.findAll('[data-testid="generated-image"]')[1].attributes('src')).toBe('https://images.example/result.png')

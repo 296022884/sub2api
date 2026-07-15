@@ -200,12 +200,10 @@ func TestGatewayRoutesImageCapabilitiesAreFilteredAndSecretFree(t *testing.T) {
 			"parameters":{
 				"size":{"values":["auto","1024x1024","1536x1024","1024x1536","2048x1152","2048x2048"],"default":"auto"},
 				"quality":{"values":["auto","low","medium","high"],"default":"auto"},
-				"background":{"values":["auto","opaque","transparent"],"default":"auto"},
-				"output_format":{"values":["png","jpeg","webp"],"default":"png"},
-				"n":{"min":1,"max":10,"default":1}
+				"output_format":{"values":["png","jpeg","webp"],"default":"png"}
 			}
 		}],
-		"uploads":{"mime_types":["image/png","image/jpeg","image/webp"],"max_files":16,"max_file_bytes":20971520,"max_total_bytes":52428800}
+		"uploads":{"mime_types":["image/png","image/jpeg","image/webp"],"max_files":1,"max_file_bytes":20971520,"max_total_bytes":20971520}
 	}`, w.Body.String())
 	require.NotContains(t, w.Body.String(), secret)
 }
