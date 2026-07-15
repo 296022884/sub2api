@@ -212,7 +212,7 @@ describe('Image Studio workspace shell', () => {
   it.each([
     ['rate limiting', 429, { error: { code: 'rate_limit_exceeded', message: 'raw upstream secret' } }, { 'Retry-After': '17' }, 'Too many requests. Try again in 17 seconds.'],
     ['insufficient balance', 402, { error: { code: 'insufficient_balance', message: 'raw upstream secret' } }, {}, 'Your balance is too low for this request.'],
-    ['moderation rejection', 400, { error: { code: 'content_policy_violation', message: 'raw upstream secret' } }, {}, 'The request was rejected by content policy.'],
+    ['moderation rejection', 400, { error: { type: 'content_policy_violation', message: 'raw upstream secret' } }, {}, 'The request was rejected by content policy.'],
     ['invalid or revoked key', 401, { error: { code: 'invalid_api_key', message: 'Bearer sk-plaintext-secret' } }, {}, 'This API key is invalid or has been revoked.'],
     ['unknown failure', 503, { error: { code: 'upstream_failure', message: 'base64:super-secret-image' } }, {}, 'The request failed. Try again manually.'],
   ])('shows a deterministic safe state for %s', async (_name, status, body, headers, expected) => {
@@ -271,7 +271,7 @@ describe('Image Studio workspace shell', () => {
     await input.trigger('change')
     await wrapper.get('[data-testid="edit-form"] textarea').setValue('Change the image')
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
-      request_id: 'Bearer sk-unsafe-request-id',
+      request_id: 'sk-proj-unsafe-request-id',
       error: { code: 'moderation_blocked', message: 'raw rejected prompt and image' },
     }), { status: 400 }))
 

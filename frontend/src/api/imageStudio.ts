@@ -99,7 +99,13 @@ export type ImageStudioFailureKind =
   | 'invalidKey'
   | 'unknown'
 
-export class ImageStudioRequestError extends Error {
+export interface ImageStudioFailure {
+  kind: ImageStudioFailureKind
+  requestId?: string
+  retryAfterSeconds?: number
+}
+
+export class ImageStudioRequestError extends Error implements ImageStudioFailure {
   readonly kind: ImageStudioFailureKind
   readonly requestId?: string
   readonly retryAfterSeconds?: number
@@ -116,7 +122,9 @@ export class ImageStudioRequestError extends Error {
 function safeRequestId(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
-  return /^[A-Za-z0-9._:-]{1,128}$/.test(trimmed) ? trimmed : undefined
+  const requestLike = /^(?:req(?:uest)?|rid)[._:-][A-Za-z0-9._:-]{1,119}$/i
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  return requestLike.test(trimmed) || uuid.test(trimmed) ? trimmed : undefined
 }
 
 function retryAfterSeconds(value: string | null): number {
@@ -168,8 +176,9 @@ async function requestError(response: Response): Promise<ImageStudioRequestError
     || signal.message.includes('insufficient balance')) {
     return new ImageStudioRequestError('insufficientBalance', requestId)
   }
-  if (['content_policy_violation', 'moderation_blocked', 'moderation_rejected'].includes(signal.code)
-    || signal.code.includes('safety_violation')) {
+  const moderationSignals = ['content_policy_violation', 'moderation_blocked', 'moderation_rejected']
+  if (moderationSignals.includes(signal.code) || moderationSignals.includes(signal.type)
+    || signal.code.includes('safety_violation') || signal.type.includes('safety_violation')) {
     return new ImageStudioRequestError('moderationRejected', requestId)
   }
   if (response.status === 401 || ['invalid_api_key', 'key_revoked', 'api_key_revoked'].includes(signal.code)
@@ -185,14 +194,15 @@ async function normalizeImageResponse(
 ): Promise<ImageStudioGenerationResponse> {
   if (!response.ok) throw await requestError(response)
 
+  const requestId = safeRequestId(response.headers.get('x-request-id'))
   let body: { data?: Array<{ b64_json?: unknown; url?: unknown }> }
   try {
     body = await response.json() as typeof body
   } catch {
-    throw new ImageStudioRequestError('unknown', safeRequestId(response.headers.get('x-request-id')))
+    throw new ImageStudioRequestError('unknown', requestId)
   }
   if (!Array.isArray(body.data)) {
-    throw new ImageStudioRequestError('unknown', safeRequestId(response.headers.get('x-request-id')))
+    throw new ImageStudioRequestError('unknown', requestId)
   }
   const mime = outputFormat === 'jpg' || outputFormat === 'jpeg' ? 'image/jpeg' : `image/${outputFormat || 'png'}`
   const images: ImageStudioGenerationResult[] = []

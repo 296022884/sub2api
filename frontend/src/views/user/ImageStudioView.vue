@@ -142,12 +142,7 @@
                 <p v-if="downloadState.generate !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('generate') }}</p>
                 <p v-if="transferError" role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{{ t('imageStudio.transferFailed') }}</p>
               </div>
-              <div v-else-if="generationFailure" role="alert" class="max-w-md break-words text-sm text-red-600 dark:text-red-400">
-                <p>{{ failureText(generationFailure) }}</p>
-                <p v-if="generationFailure.requestId" class="mt-2 font-mono text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('imageStudio.errors.requestId', { requestId: generationFailure.requestId }) }}
-                </p>
-              </div>
+              <StudioFailureMessage v-else-if="generationFailure" :failure="generationFailure" />
               <div v-else class="max-w-sm text-center">
                 <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.blankTitle') }}</h2>
                 <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.blankDescription') }}</p>
@@ -252,12 +247,7 @@
                 <button v-if="editResults.length > 1" type="button" class="btn btn-secondary mt-4 flex h-10 w-full items-center justify-center" :disabled="downloadState.edit === 'preparing'" @click="downloadResults('edit', editResults)">{{ t('imageStudio.downloadAll') }}</button>
                 <p v-if="downloadState.edit !== 'idle'" role="status" class="mt-3 text-sm text-gray-600 dark:text-gray-300">{{ downloadStateText('edit') }}</p>
               </div>
-              <div v-else-if="editFailure" role="alert" class="max-w-md break-words text-sm text-red-600 dark:text-red-400">
-                <p>{{ failureText(editFailure) }}</p>
-                <p v-if="editFailure.requestId" class="mt-2 font-mono text-xs text-gray-600 dark:text-gray-300">
-                  {{ t('imageStudio.errors.requestId', { requestId: editFailure.requestId }) }}
-                </p>
-              </div>
+              <StudioFailureMessage v-else-if="editFailure" :failure="editFailure" />
               <div v-else class="max-w-sm text-center">
                 <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('imageStudio.editBlankTitle') }}</h2>
                 <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ t('imageStudio.editBlankDescription') }}</p>
@@ -275,6 +265,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import CapabilitySelect from '@/components/image-studio/CapabilitySelect.vue'
+import StudioFailureMessage from '@/components/image-studio/StudioFailureMessage.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import TextArea from '@/components/common/TextArea.vue'
 import { keysAPI } from '@/api/keys'
@@ -290,7 +281,7 @@ import {
   editImageStudioImages,
   getImageStudioCapabilities,
   type ImageStudioCapabilities,
-  type ImageStudioFailureKind,
+  type ImageStudioFailure,
   type ImageStudioGenerationResult,
   ImageStudioRequestError,
 } from '@/api/imageStudio'
@@ -298,7 +289,6 @@ import type { ApiKey } from '@/types'
 
 type StudioTab = 'generate' | 'edit'
 type DownloadState = 'idle' | 'preparing' | 'success' | 'failed'
-type StudioFailure = { kind: ImageStudioFailureKind; requestId?: string; retryAfterSeconds?: number }
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -312,7 +302,7 @@ const loadingKeys = ref(true)
 const loadingCapabilities = ref(false)
 const capabilityError = ref(false)
 const submitting = ref(false)
-const generationFailure = ref<StudioFailure | null>(null)
+const generationFailure = ref<ImageStudioFailure | null>(null)
 const results = ref<ImageStudioGenerationResult[]>([])
 const failedResultCount = ref(0)
 const generationId = ref(0)
@@ -321,7 +311,7 @@ const transferError = ref(false)
 const downloadState = reactive<Record<StudioTab, DownloadState>>({ generate: 'idle', edit: 'idle' })
 const editModelId = ref('')
 const editSubmitting = ref(false)
-const editFailure = ref<StudioFailure | null>(null)
+const editFailure = ref<ImageStudioFailure | null>(null)
 const editResults = ref<ImageStudioGenerationResult[]>([])
 const editFailedResultCount = ref(0)
 const editGenerationId = ref(0)
@@ -405,18 +395,11 @@ function syncFeatureBlocked() {
   if (appStore.cachedPublicSettings?.image_studio_enabled === false) featureBlocked.value = true
 }
 
-function failureFrom(error: unknown): StudioFailure {
+function failureFrom(error: unknown): ImageStudioFailure {
   if (error instanceof ImageStudioRequestError) {
     return { kind: error.kind, requestId: error.requestId, retryAfterSeconds: error.retryAfterSeconds }
   }
   return { kind: 'unknown' }
-}
-
-function failureText(failure: StudioFailure) {
-  if (failure.kind === 'rateLimited') {
-    return t('imageStudio.errors.rateLimited', { seconds: failure.retryAfterSeconds ?? 60 })
-  }
-  return t(`imageStudio.errors.${failure.kind}`)
 }
 
 async function downloadResults(kind: StudioTab, availableResults: ImageStudioGenerationResult[], onlyIndex?: number) {
