@@ -40,15 +40,9 @@ type imageStudioCapabilitiesResponse struct {
 }
 
 var imageStudioOpenAIModels = []imageStudioModelCapability{
-	newImageStudioOpenAIModel("gpt-image-1", []string{"generate", "edit"}, legacyImageStudioSizes),
-	newImageStudioOpenAIModel("gpt-image-1-mini", []string{"generate", "edit"}, legacyImageStudioSizes),
-	newImageStudioOpenAIModel("gpt-image-1.5", []string{"generate"}, legacyImageStudioSizes),
-	newImageStudioOpenAIModel("gpt-image-1.5-2025-12-16", []string{"generate"}, legacyImageStudioSizes),
 	newImageStudioOpenAIModel("gpt-image-2", []string{"generate", "edit"}, gptImage2StudioSizes),
-	newImageStudioOpenAIModel("gpt-image-2-2026-04-21", []string{"generate", "edit"}, gptImage2StudioSizes),
 }
 
-var legacyImageStudioSizes = []string{"auto", "1024x1024", "1536x1024", "1024x1536"}
 var gptImage2StudioSizes = []string{"auto", "1024x1024", "1536x1024", "1024x1536", "2048x1152", "2048x2048"}
 
 // Keep the advertised preflight limit at or below the gateway's multipart

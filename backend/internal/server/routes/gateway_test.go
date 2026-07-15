@@ -208,7 +208,7 @@ func TestGatewayRoutesImageCapabilitiesAreFilteredAndSecretFree(t *testing.T) {
 	require.NotContains(t, w.Body.String(), secret)
 }
 
-func TestGatewayRoutesImageCapabilitiesUseModelSpecificOperationsAndControls(t *testing.T) {
+func TestGatewayRoutesImageCapabilitiesFailClosedForUnverifiedModels(t *testing.T) {
 	router, secret := newImageCapabilitiesRoutesTestRouter(t, []string{"gpt-image-1.5"}, []string{"gpt-image-1.5"})
 	req := httptest.NewRequest(http.MethodGet, "/v1/images/capabilities", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
@@ -217,14 +217,8 @@ func TestGatewayRoutesImageCapabilitiesUseModelSpecificOperationsAndControls(t *
 
 	require.Equal(t, http.StatusOK, w.Code)
 	response := gjson.Parse(w.Body.String())
-	require.JSONEq(t, `["generate"]`, response.Get("operations").Raw)
-	require.Len(t, response.Get("models").Array(), 1)
-	require.Equal(t, "gpt-image-1.5", response.Get("models.0.id").String())
-	require.JSONEq(t, `["generate"]`, response.Get("models.0.operations").Raw)
-	require.JSONEq(t,
-		`["auto","1024x1024","1536x1024","1024x1536"]`,
-		response.Get("models.0.parameters.size.values").Raw,
-	)
+	require.JSONEq(t, `[]`, response.Get("operations").Raw)
+	require.Empty(t, response.Get("models").Array())
 }
 
 func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
