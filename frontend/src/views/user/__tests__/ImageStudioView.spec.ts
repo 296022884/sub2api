@@ -323,6 +323,31 @@ describe('Image Studio workspace shell', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
   })
 
+  it('discovers runtime re-enablement on a later manual submission attempt', async () => {
+    const wrapper = await mountReadyStudio()
+    appStore.fetchPublicSettings
+      .mockImplementationOnce(async () => {
+        appStore.cachedPublicSettings = { image_studio_enabled: false }
+        return appStore.cachedPublicSettings
+      })
+      .mockImplementationOnce(async () => {
+        appStore.cachedPublicSettings = { image_studio_enabled: true }
+        return appStore.cachedPublicSettings
+      })
+      .mockResolvedValueOnce({ image_studio_enabled: true })
+    await wrapper.get('textarea').setValue('Submit after re-enable')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Image Studio has been disabled. New requests are blocked.'))
+
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'cmUtZW5hYmxlZA==' }] }), { status: 200 }))
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.findAll('[data-testid="generated-image"]')).toHaveLength(1))
+    expect(wrapper.text()).not.toContain('Image Studio has been disabled. New requests are blocked.')
+    const submissionCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/v1/images/generations'))
+    expect(submissionCalls).toHaveLength(1)
+  })
+
   it('removes an invalid selected key while retaining the localized failure', async () => {
     const wrapper = await mountReadyStudio()
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({

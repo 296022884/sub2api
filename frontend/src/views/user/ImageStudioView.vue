@@ -329,12 +329,12 @@ const selectedModel = computed(() => capabilities.value?.models.find((model) => 
 const editModels = computed(() => capabilities.value?.models.filter((model) => model.operations.includes('edit')) || [])
 const editModel = computed(() => editModels.value.find((model) => model.id === editModelId.value))
 const canGenerate = computed(() => {
-  if (featureBlocked.value || !selectedKey.value || !selectedModel.value || !form.prompt.trim()) return false
+  if (!selectedKey.value || !selectedModel.value || !form.prompt.trim()) return false
   const count = selectedModel.value.parameters.n
   return !count || (Number.isInteger(form.n) && form.n >= count.min && form.n <= count.max)
 })
 const canEdit = computed(() => {
-  if (featureBlocked.value || !selectedKey.value || !editModel.value || uploads.value.length === 0 || !editForm.prompt.trim()) return false
+  if (!selectedKey.value || !editModel.value || uploads.value.length === 0 || !editForm.prompt.trim()) return false
   const count = editModel.value.parameters.n
   return !count || (Number.isInteger(editForm.n) && editForm.n >= count.min && editForm.n <= count.max)
 })
