@@ -181,7 +181,8 @@ async function requestError(response: Response): Promise<ImageStudioRequestError
     || signal.code.includes('safety_violation') || signal.type.includes('safety_violation')) {
     return new ImageStudioRequestError('moderationRejected', requestId)
   }
-  if (response.status === 401 || ['invalid_api_key', 'key_revoked', 'api_key_revoked'].includes(signal.code)
+  if (response.status === 401 || ['invalid_api_key', 'api_key_expired', 'key_expired', 'key_revoked', 'api_key_revoked'].includes(signal.code)
+    || signal.type === 'api_key_expired'
     || signal.message.includes('api key has been revoked')) {
     return new ImageStudioRequestError('invalidKey', requestId)
   }

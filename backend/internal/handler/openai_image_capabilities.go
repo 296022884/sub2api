@@ -59,6 +59,10 @@ var imageStudioOpenAIModels = []imageStudioModelCapability{
 var legacyImageStudioSizes = []string{"auto", "1024x1024", "1536x1024", "1024x1536"}
 var gptImage2StudioSizes = []string{"auto", "1024x1024", "1536x1024", "1024x1536", "2048x1152", "2048x2048"}
 
+// Keep the advertised preflight limit at or below the gateway's multipart
+// upload-part reader limit so accepted files cannot be truncated in transit.
+const imageStudioMaxUploadPartBytes = 20 * 1024 * 1024
+
 func newImageStudioOpenAIModel(id string, operations []string, sizes []string) imageStudioModelCapability {
 	return imageStudioModelCapability{
 		ID:         id,
@@ -134,7 +138,7 @@ func (h *OpenAIGatewayHandler) ImageCapabilities(c *gin.Context) {
 		Uploads: imageStudioUploadCapability{
 			MIMETypes:     []string{"image/png", "image/jpeg", "image/webp"},
 			MaxFiles:      16,
-			MaxFileBytes:  50 * 1024 * 1024,
+			MaxFileBytes:  imageStudioMaxUploadPartBytes,
 			MaxTotalBytes: 50 * 1024 * 1024,
 		},
 	})

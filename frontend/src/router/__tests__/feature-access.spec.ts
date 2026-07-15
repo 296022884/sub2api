@@ -145,7 +145,7 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = true
     appStore.fetchPublicSettings.mockResolvedValue({ image_studio_enabled: true })
     keysAPI.list.mockResolvedValue({
-      items: [{ status: 'active', group: { platform: 'openai', allow_image_generation: true } }],
+      items: [{ status: 'active', group: { status: 'active', platform: 'openai', allow_image_generation: true } }],
       pages: 1,
     })
 
@@ -180,6 +180,7 @@ describe('feature route guard', () => {
         { status: 'inactive', group: { platform: 'openai', allow_image_generation: true } },
         { status: 'active', group: { platform: 'gemini', allow_image_generation: true } },
         { status: 'active', group: { platform: 'openai', allow_image_generation: false } },
+        { status: 'active', group: { status: 'inactive', platform: 'openai', allow_image_generation: true } },
       ],
       pages: 1,
     })

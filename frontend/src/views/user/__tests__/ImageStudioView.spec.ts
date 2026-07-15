@@ -122,14 +122,14 @@ describe('Image Studio workspace shell', () => {
           key: 'sk-first-1234',
           name: 'Primary images',
           status: 'active',
-          group: { platform: 'openai', allow_image_generation: true },
+          group: { status: 'active', platform: 'openai', allow_image_generation: true },
         },
         {
           id: 8,
           key: 'sk-second-5678',
           name: 'Backup images',
           status: 'active',
-          group: { platform: 'openai', allow_image_generation: true },
+          group: { status: 'active', platform: 'openai', allow_image_generation: true },
         },
       ],
       pages: 1,
@@ -220,6 +220,7 @@ describe('Image Studio workspace shell', () => {
     ['insufficient balance', 402, { error: { code: 'insufficient_balance', message: 'raw upstream secret' } }, {}, 'Your balance is too low for this request.'],
     ['moderation rejection', 400, { error: { type: 'content_policy_violation', message: 'raw upstream secret' } }, {}, 'The request was rejected by content policy.'],
     ['invalid or revoked key', 401, { error: { code: 'invalid_api_key', message: 'Bearer sk-plaintext-secret' } }, {}, 'This API key is invalid or has been revoked.'],
+    ['expired key', 403, { error: { code: 'API_KEY_EXPIRED', message: 'raw upstream secret' } }, {}, 'This API key is invalid or has been revoked.'],
     ['unknown failure', 503, { error: { code: 'upstream_failure', message: 'base64:super-secret-image' } }, {}, 'The request failed. Try again manually.'],
   ])('shows a deterministic safe state for %s', async (_name, status, body, headers, expected) => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -348,11 +349,14 @@ describe('Image Studio workspace shell', () => {
     expect(submissionCalls).toHaveLength(1)
   })
 
-  it('removes an invalid selected key while retaining the localized failure', async () => {
+  it.each([
+    ['invalid', 401, 'invalid_api_key'],
+    ['expired', 403, 'API_KEY_EXPIRED'],
+  ])('removes an %s selected key while retaining the localized failure', async (_kind, status, code) => {
     const wrapper = await mountReadyStudio()
     vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
-      error: { code: 'invalid_api_key' },
-    }), { status: 401 }))
+      error: { code },
+    }), { status }))
     await wrapper.get('textarea').setValue('Rejected key')
 
     await wrapper.get('form').trigger('submit')

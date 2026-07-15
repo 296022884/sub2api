@@ -268,7 +268,7 @@ import CapabilitySelect from '@/components/image-studio/CapabilitySelect.vue'
 import StudioFailureMessage from '@/components/image-studio/StudioFailureMessage.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import TextArea from '@/components/common/TextArea.vue'
-import { keysAPI } from '@/api/keys'
+import { listEligibleImageStudioKeys } from '@/composables/useImageStudioAccess'
 import { useAppStore } from '@/stores/app'
 import {
   downloadImageArchive,
@@ -282,13 +282,16 @@ import {
   getImageStudioCapabilities,
   type ImageStudioCapabilities,
   type ImageStudioFailure,
+  type ImageStudioGenerationResponse,
   type ImageStudioGenerationResult,
+  type ImageStudioModelCapability,
   ImageStudioRequestError,
 } from '@/api/imageStudio'
 import type { ApiKey } from '@/types'
 
 type StudioTab = 'generate' | 'edit'
 type DownloadState = 'idle' | 'preparing' | 'success' | 'failed'
+type StudioForm = { prompt: string; size: string; quality: string; background: string; outputFormat: string; n: number }
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -322,8 +325,8 @@ let editRequest = 0
 let replacingInvalidKey = false
 const featureBlocked = ref(appStore.cachedPublicSettings?.image_studio_enabled === false)
 
-const form = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
-const editForm = reactive({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
+const form = reactive<StudioForm>({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
+const editForm = reactive<StudioForm>({ prompt: '', size: '', quality: '', background: '', outputFormat: '', n: 1 })
 const selectedKey = computed(() => eligibleKeys.value.find((key) => key.id === selectedKeyId.value))
 const selectedModel = computed(() => capabilities.value?.models.find((model) => model.id === selectedModelId.value))
 const editModels = computed(() => capabilities.value?.models.filter((model) => model.operations.includes('edit')) || [])
@@ -456,13 +459,65 @@ async function transferResultToEdit(result: ImageStudioGenerationResult, index: 
   }
 }
 
+function resetParameterDefaults(
+  target: StudioForm,
+  parameters?: ImageStudioModelCapability['parameters'],
+) {
+  target.size = parameters?.size?.default || ''
+  target.quality = parameters?.quality?.default || ''
+  target.background = parameters?.background?.default || ''
+  target.outputFormat = parameters?.output_format?.default || ''
+  target.n = parameters?.n?.default || 1
+}
+
+function imageRequestPayload(
+  model: string,
+  target: StudioForm,
+  parameters: ImageStudioModelCapability['parameters'],
+): Record<string, string | number> {
+  const payload: Record<string, string | number> = { model, prompt: target.prompt.trim() }
+  if (parameters.size) payload.size = target.size
+  if (parameters.quality) payload.quality = target.quality
+  if (parameters.background) payload.background = target.background
+  if (parameters.output_format) payload.output_format = target.outputFormat
+  if (parameters.n) payload.n = target.n
+  return payload
+}
+
+interface StudioOperationCallbacks {
+  isCurrent: () => boolean
+  setSubmitting: (value: boolean) => void
+  clearResult: () => void
+  submit: () => Promise<ImageStudioGenerationResponse>
+  applyResult: (response: ImageStudioGenerationResponse) => void
+  setFailure: (failure: ImageStudioFailure) => void
+}
+
+async function runStudioOperation(operation: StudioOperationCallbacks) {
+  operation.setSubmitting(true)
+  operation.clearResult()
+  let submitted = false
+  try {
+    if (await refreshFeatureBlocked()) return
+    submitted = true
+    const response = await operation.submit()
+    if (!operation.isCurrent()) return
+    operation.applyResult(response)
+    if (response.images.length === 0) operation.setFailure({ kind: 'unknown' })
+  } catch (error) {
+    if (!operation.isCurrent()) return
+    const failure = failureFrom(error)
+    await removeSelectedKeyAfterInvalidFailure(failure)
+    operation.setFailure(failure)
+  } finally {
+    if (operation.isCurrent()) operation.setSubmitting(false)
+    if (submitted) await refreshFeatureBlocked()
+  }
+}
+
 function resetEditModelValues() {
   const parameters = editModel.value?.parameters
-  editForm.size = parameters?.size?.default || ''
-  editForm.quality = parameters?.quality?.default || ''
-  editForm.background = parameters?.background?.default || ''
-  editForm.outputFormat = parameters?.output_format?.default || ''
-  editForm.n = parameters?.n?.default || 1
+  resetParameterDefaults(editForm, parameters)
   clearUploads()
   uploadError.value = ''
   editResults.value = []
@@ -475,48 +530,31 @@ async function edit() {
   syncFeatureBlocked()
   if (editSubmitting.value || !canEdit.value || !selectedKey.value || !editModel.value) return
   const request = ++editRequest
+  const key = selectedKey.value.key
   const parameters = editModel.value.parameters
-  const payload: Record<string, string | number> = { model: editModel.value.id, prompt: editForm.prompt.trim() }
-  if (parameters.size) payload.size = editForm.size
-  if (parameters.quality) payload.quality = editForm.quality
-  if (parameters.background) payload.background = editForm.background
-  if (parameters.output_format) payload.output_format = editForm.outputFormat
-  if (parameters.n) payload.n = editForm.n
-
-  editSubmitting.value = true
-  editFailure.value = null
-  editResults.value = []
-  editFailedResultCount.value = 0
-  downloadState.edit = 'idle'
-  let submitted = false
-  try {
-    if (await refreshFeatureBlocked()) return
-    submitted = true
-    const response = await editImageStudioImages(selectedKey.value.key, uploads.value.map(({ file }) => file), payload, parameters.output_format ? editForm.outputFormat : 'png')
-    if (request !== editRequest) return
-    editResults.value = response.images
-    editFailedResultCount.value = response.failedCount
-    editGenerationId.value += 1
-    if (response.images.length === 0) editFailure.value = { kind: 'unknown' }
-  } catch (error) {
-    if (request === editRequest) {
-      const failure = failureFrom(error)
-      await removeSelectedKeyAfterInvalidFailure(failure)
-      editFailure.value = failure
-    }
-  } finally {
-    if (request === editRequest) editSubmitting.value = false
-    if (submitted) await refreshFeatureBlocked()
-  }
+  const payload = imageRequestPayload(editModel.value.id, editForm, parameters)
+  await runStudioOperation({
+    isCurrent: () => request === editRequest,
+    setSubmitting: (value) => { editSubmitting.value = value },
+    clearResult: () => {
+      editFailure.value = null
+      editResults.value = []
+      editFailedResultCount.value = 0
+      downloadState.edit = 'idle'
+    },
+    submit: () => editImageStudioImages(key, uploads.value.map(({ file }) => file), payload, parameters.output_format ? editForm.outputFormat : 'png'),
+    applyResult: (response) => {
+      editResults.value = response.images
+      editFailedResultCount.value = response.failedCount
+      editGenerationId.value += 1
+    },
+    setFailure: (failure) => { editFailure.value = failure },
+  })
 }
 
 function resetModelValues() {
   const parameters = selectedModel.value?.parameters
-  form.size = parameters?.size?.default || ''
-  form.quality = parameters?.quality?.default || ''
-  form.background = parameters?.background?.default || ''
-  form.outputFormat = parameters?.output_format?.default || ''
-  form.n = parameters?.n?.default || 1
+  resetParameterDefaults(form, parameters)
   results.value = []
   failedResultCount.value = 0
   if (!replacingInvalidKey) generationFailure.value = null
@@ -526,43 +564,30 @@ function resetModelValues() {
 async function generate() {
   syncFeatureBlocked()
   if (submitting.value || !canGenerate.value || !selectedKey.value || !selectedModel.value) return
+  const key = selectedKey.value.key
   const parameters = selectedModel.value.parameters
-  const payload: Record<string, string | number> = {
-    model: selectedModel.value.id,
-    prompt: form.prompt.trim(),
-  }
-  if (parameters.size) payload.size = form.size
-  if (parameters.quality) payload.quality = form.quality
-  if (parameters.background) payload.background = form.background
-  if (parameters.output_format) payload.output_format = form.outputFormat
-  if (parameters.n) payload.n = form.n
-
-  submitting.value = true
-  generationFailure.value = null
-  results.value = []
-  failedResultCount.value = 0
-  downloadState.generate = 'idle'
-  let submitted = false
-  try {
-    if (await refreshFeatureBlocked()) return
-    submitted = true
-    const response = await generateImageStudioImages(
-      selectedKey.value.key,
+  const payload = imageRequestPayload(selectedModel.value.id, form, parameters)
+  await runStudioOperation({
+    isCurrent: () => true,
+    setSubmitting: (value) => { submitting.value = value },
+    clearResult: () => {
+      generationFailure.value = null
+      results.value = []
+      failedResultCount.value = 0
+      downloadState.generate = 'idle'
+    },
+    submit: () => generateImageStudioImages(
+      key,
       payload,
       parameters.output_format ? form.outputFormat : 'png',
-    )
-    results.value = response.images
-    failedResultCount.value = response.failedCount
-    generationId.value += 1
-    if (response.images.length === 0) generationFailure.value = { kind: 'unknown' }
-  } catch (error) {
-    const failure = failureFrom(error)
-    await removeSelectedKeyAfterInvalidFailure(failure)
-    generationFailure.value = failure
-  } finally {
-    submitting.value = false
-    if (submitted) await refreshFeatureBlocked()
-  }
+    ),
+    applyResult: (response) => {
+      results.value = response.images
+      failedResultCount.value = response.failedCount
+      generationId.value += 1
+    },
+    setFailure: (failure) => { generationFailure.value = failure },
+  })
 }
 
 watch(selectedModelId, resetModelValues)
@@ -602,16 +627,7 @@ watch(selectedKeyId, async () => {
 
 onMounted(async () => {
   try {
-    const keys: ApiKey[] = []
-    let page = 1
-    while (true) {
-      const response = await keysAPI.list(page, 100, { status: 'active', sort_by: 'created_at', sort_order: 'desc' })
-      keys.push(...(response.items || []))
-      if (page >= response.pages || (response.items || []).length === 0) break
-      page += 1
-    }
-    eligibleKeys.value = keys.filter((key) => key.status === 'active'
-      && key.group?.platform === 'openai' && key.group?.allow_image_generation === true)
+    eligibleKeys.value = await listEligibleImageStudioKeys()
     selectedKeyId.value = eligibleKeys.value[0]?.id ?? null
   } finally {
     loadingKeys.value = false

@@ -205,7 +205,7 @@ func TestGatewayRoutesImageCapabilitiesAreFilteredAndSecretFree(t *testing.T) {
 				"n":{"min":1,"max":10,"default":1}
 			}
 		}],
-		"uploads":{"mime_types":["image/png","image/jpeg","image/webp"],"max_files":16,"max_file_bytes":52428800,"max_total_bytes":52428800}
+		"uploads":{"mime_types":["image/png","image/jpeg","image/webp"],"max_files":16,"max_file_bytes":20971520,"max_total_bytes":52428800}
 	}`, w.Body.String())
 	require.NotContains(t, w.Body.String(), secret)
 }

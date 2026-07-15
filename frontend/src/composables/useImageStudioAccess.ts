@@ -10,12 +10,28 @@ const evaluatedUserId = ref<number | null>(null)
 let pendingLoad: { userId: number; promise: Promise<boolean> } | null = null
 const pageSize = 100
 
-function isEligibleImageStudioKey(key: ApiKey): boolean {
+export function isEligibleImageStudioKey(key: ApiKey): boolean {
   return (
     key.status === 'active' &&
+    key.group?.status === 'active' &&
     key.group?.platform === 'openai' &&
     key.group?.allow_image_generation === true
   )
+}
+
+export async function listEligibleImageStudioKeys(): Promise<ApiKey[]> {
+  const keys: ApiKey[] = []
+  let page = 1
+  while (true) {
+    const response = await keysAPI.list(page, pageSize, {
+      status: 'active',
+      sort_by: 'created_at',
+      sort_order: 'desc',
+    })
+    keys.push(...(response.items || []).filter(isEligibleImageStudioKey))
+    if (page >= response.pages || (response.items || []).length === 0) return keys
+    page += 1
+  }
 }
 
 async function loadImageStudioAccess(force = false): Promise<boolean> {
@@ -33,31 +49,13 @@ async function loadImageStudioAccess(force = false): Promise<boolean> {
 
   loading.value = true
   const promise = (async () => {
-    let page = 1
-    while (true) {
-      const response = await keysAPI.list(page, pageSize, {
-        status: 'active',
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      })
-      if ((response.items || []).some(isEligibleImageStudioKey)) {
-        if (useAuthStore().user?.id === userId) {
-          hasEligibleKey.value = true
-          evaluatedUserId.value = userId
-          loaded.value = true
-        }
-        return true
-      }
-      if (page >= response.pages || (response.items || []).length === 0) {
-        if (useAuthStore().user?.id === userId) {
-          hasEligibleKey.value = false
-          evaluatedUserId.value = userId
-          loaded.value = true
-        }
-        return false
-      }
-      page += 1
+    const eligible = (await listEligibleImageStudioKeys()).length > 0
+    if (useAuthStore().user?.id === userId) {
+      hasEligibleKey.value = eligible
+      evaluatedUserId.value = userId
+      loaded.value = true
     }
+    return eligible
   })()
     .catch(() => {
       if (useAuthStore().user?.id === userId) {

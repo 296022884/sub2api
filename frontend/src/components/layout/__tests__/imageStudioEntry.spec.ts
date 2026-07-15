@@ -75,7 +75,7 @@ describe('Image Studio sidebar entry', () => {
     keysAPI.list.mockReset()
     keysAPI.list.mockImplementation(async () => ({
       items: state.hasEligibleKey
-        ? [{ status: 'active', group: { platform: 'openai', allow_image_generation: true } }]
+        ? [{ status: 'active', group: { status: 'active', platform: 'openai', allow_image_generation: true } }]
         : [],
       pages: 1,
     }))
