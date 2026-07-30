@@ -79,7 +79,7 @@ func newImageCapabilitiesRoutesTestRouter(t *testing.T, groupModels, accountMode
 			})
 			c.Next()
 		}),
-		nil, nil, nil, nil, cfg,
+		nil, nil, nil, nil, nil, cfg,
 	)
 	return router, secret
 }
