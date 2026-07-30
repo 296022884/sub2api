@@ -2,6 +2,9 @@ name: Build Image Studio Image
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - automation/image-studio
 
 permissions:
   contents: read
@@ -24,8 +27,16 @@ jobs:
         id: vars
         shell: bash
         run: |
+          version="$(./backend/scripts/resolve-version.sh)"
+          version="${version#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid resolved version: $version" >&2
+            exit 1
+          fi
           echo "short_sha=${GITHUB_SHA::9}" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "release_version=v${version}" >> "$GITHUB_OUTPUT"
+          echo "build_version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -46,14 +57,14 @@ jobs:
           push: true
           pull: true
           tags: |
-            ${{ steps.vars.outputs.image }}:v0.1.168-image-studio-${{ steps.vars.outputs.short_sha }}
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_version }}-image-studio-${{ steps.vars.outputs.short_sha }}
             ${{ steps.vars.outputs.image }}:feature-image-studio
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=0.1.168-image-studio.${{ steps.vars.outputs.short_sha }}
+            org.opencontainers.image.version=${{ steps.vars.outputs.build_version }}-image-studio.${{ steps.vars.outputs.short_sha }}
           build-args: |
-            VERSION=0.1.168-image-studio.${{ steps.vars.outputs.short_sha }}
+            VERSION=${{ steps.vars.outputs.build_version }}-image-studio.${{ steps.vars.outputs.short_sha }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -64,7 +75,7 @@ jobs:
           {
             echo "## Image published"
             echo
-            echo "\`${{ steps.vars.outputs.image }}:v0.1.168-image-studio-${{ steps.vars.outputs.short_sha }}\`"
+            echo "\`${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.release_version }}-image-studio-${{ steps.vars.outputs.short_sha }}\`"
             echo
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
