@@ -56,6 +56,12 @@ declare module 'vue-router' {
     requiresRiskControl?: boolean
 
     /**
+     * Whether this route requires Image Studio to be enabled and an eligible key
+     * @default false
+     */
+    requiresImageStudio?: boolean
+
+    /**
      * i18n key for the page title
      */
     titleKey?: string

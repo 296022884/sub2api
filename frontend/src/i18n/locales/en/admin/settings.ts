@@ -30,6 +30,12 @@ export default {
           enabled: 'Enable Available Channels',
           enabledHint: 'When off, the sidebar entry is hidden and the endpoint returns an empty list.',
         },
+        imageStudio: {
+          title: 'Image Studio',
+          description: 'Allow eligible OpenAI API key users to open the Image Studio workspace. Disabled by default.',
+          enabled: 'Enable Image Studio',
+          enabledHint: 'When off, navigation is hidden and direct workspace access redirects to the dashboard.',
+        },
         modelPlaza: {
           title: 'Model Plaza',
           description: 'A public page showcasing available models and pricing by group. Disabled by default.',

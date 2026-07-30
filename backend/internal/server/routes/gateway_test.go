@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,75 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
+
+type imageCapabilitiesAccountRepo struct {
+	service.AccountRepository
+	accounts []service.Account
+}
+
+func (r imageCapabilitiesAccountRepo) ListSchedulableByGroupIDAndPlatform(_ context.Context, _ int64, platform string) ([]service.Account, error) {
+	accounts := make([]service.Account, 0, len(r.accounts))
+	for _, account := range r.accounts {
+		if account.Platform == platform {
+			accounts = append(accounts, account)
+		}
+	}
+	return accounts, nil
+}
+
+func newImageCapabilitiesRoutesTestRouter(t *testing.T, groupModels, accountModels []string) (*gin.Engine, string) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	secret := "sk-image-studio-sentinel-secret"
+	groupID := int64(1)
+	cfg := &config.Config{}
+	modelMapping := make(map[string]any, len(accountModels))
+	for _, model := range accountModels {
+		modelMapping[model] = model
+	}
+	gatewayService := service.NewOpenAIGatewayService(
+		imageCapabilitiesAccountRepo{accounts: []service.Account{{
+			ID:          10,
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Credentials: map[string]any{"model_mapping": modelMapping},
+		}}},
+		nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	openAIHandler := handler.NewOpenAIGatewayHandler(gatewayService, nil, nil, nil, nil, nil, nil, nil, cfg)
+
+	RegisterGatewayRoutes(
+		router,
+		&handler.Handlers{
+			OpenAIGateway: openAIHandler,
+			AsyncImage:    handler.NewAsyncImageHandler(nil, nil),
+		},
+		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+			require.Equal(t, "Bearer "+secret, c.GetHeader("Authorization"))
+			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+				Key:     secret,
+				GroupID: &groupID,
+				Group: &service.Group{
+					ID:                   groupID,
+					Platform:             service.PlatformOpenAI,
+					AllowImageGeneration: true,
+					ModelsListConfig: service.GroupModelsListConfig{
+						Enabled: true,
+						Models:  groupModels,
+					},
+				},
+			})
+			c.Next()
+		}),
+		nil, nil, nil, nil, nil, cfg,
+	)
+	return router, secret
+}
 
 func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 	return newGatewayRoutesTestRouterWithConfig(&config.Config{
@@ -122,6 +191,48 @@ func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 		router.ServeHTTP(w, req)
 		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should hit OpenAI images handler", path)
 	}
+}
+
+func TestGatewayRoutesImageCapabilitiesAreFilteredAndSecretFree(t *testing.T) {
+	router, secret := newImageCapabilitiesRoutesTestRouter(
+		t,
+		[]string{"gpt-image-1", "gpt-image-2", "unknown-image-model"},
+		[]string{"gpt-image-2"},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/images/capabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.JSONEq(t, `{
+		"operations":["generate","edit"],
+		"models":[{
+			"id":"gpt-image-2",
+			"operations":["generate","edit"],
+			"parameters":{
+				"size":{"values":["auto","1024x1024","1536x1024","1024x1536","2048x1152","2048x2048"],"default":"auto"},
+				"quality":{"values":["auto","low","medium","high"],"default":"auto"},
+				"output_format":{"values":["png","jpeg","webp"],"default":"png"}
+			}
+		}],
+		"uploads":{"mime_types":["image/png","image/jpeg","image/webp"],"max_files":1,"max_file_bytes":20971520,"max_total_bytes":20971520}
+	}`, w.Body.String())
+	require.NotContains(t, w.Body.String(), secret)
+}
+
+func TestGatewayRoutesImageCapabilitiesFailClosedForUnverifiedModels(t *testing.T) {
+	router, secret := newImageCapabilitiesRoutesTestRouter(t, []string{"gpt-image-1.5"}, []string{"gpt-image-1.5"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/images/capabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	response := gjson.Parse(w.Body.String())
+	require.JSONEq(t, `[]`, response.Get("operations").Raw)
+	require.Empty(t, response.Get("models").Array())
 }
 
 func TestGatewayRoutesAsyncImagesPathsAreRegistered(t *testing.T) {

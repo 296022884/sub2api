@@ -13,6 +13,7 @@ import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveRouteDocumentTitle } from './title'
+import { useImageStudioAccess } from '@/composables/useImageStudioAccess'
 
 /**
  * Route definitions with lazy loading
@@ -227,6 +228,18 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'batchImageGuide.title',
       descriptionKey: 'batchImageGuide.description'
     }
+  },
+  {
+    path: '/image-studio',
+    name: 'ImageStudio',
+    component: () => import('@/views/user/ImageStudioView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      requiresImageStudio: true,
+      title: 'Image Studio',
+      titleKey: 'imageStudio.title',
+    },
   },
   {
     path: '/usage',
@@ -912,6 +925,24 @@ router.beforeEach(async (to, _from, next) => {
   ) {
     next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
     return
+  }
+
+  if (to.meta.requiresImageStudio) {
+    let freshSettings = null
+    try {
+      freshSettings = await appStore.fetchPublicSettings(true)
+    } catch (error) {
+      console.warn('Failed to refresh Image Studio setting in route guard', error)
+    }
+    if (freshSettings?.image_studio_enabled !== true) {
+      next('/dashboard')
+      return
+    }
+    const { refreshImageStudioAccess } = useImageStudioAccess()
+    if (!(await refreshImageStudioAccess(true))) {
+      next({ path: '/keys', query: { notice: 'image-studio-key-required' } })
+      return
+    }
   }
 
   if (

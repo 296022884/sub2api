@@ -37,11 +37,44 @@ func (s *settingPublicRepoStub) GetMultiple(ctx context.Context, keys []string) 
 }
 
 func (s *settingPublicRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
-	panic("unexpected SetMultiple call")
+	if s.values == nil {
+		s.values = make(map[string]string)
+	}
+	for key, value := range settings {
+		s.values[key] = value
+	}
+	return nil
 }
 
 func (s *settingPublicRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
-	panic("unexpected GetAll call")
+	out := make(map[string]string, len(s.values))
+	for key, value := range s.values {
+		out[key] = value
+	}
+	return out, nil
+}
+
+func TestSettingService_ImageStudioUpdateReachesPublicAndInjectedSettings(t *testing.T) {
+	repo := &settingPublicRepoStub{values: map[string]string{}}
+	svc := NewSettingService(repo, &config.Config{})
+
+	settings, err := svc.GetAllSettings(context.Background())
+	require.NoError(t, err)
+	require.False(t, settings.ImageStudioEnabled)
+
+	settings.ImageStudioEnabled = true
+	require.NoError(t, svc.UpdateSettings(context.Background(), settings))
+	require.Equal(t, "true", repo.values[SettingKeyImageStudioEnabled])
+
+	publicSettings, err := svc.GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.True(t, publicSettings.ImageStudioEnabled)
+
+	injected, err := svc.GetPublicSettingsForInjection(context.Background())
+	require.NoError(t, err)
+	payload, ok := injected.(*PublicSettingsInjectionPayload)
+	require.True(t, ok)
+	require.True(t, payload.ImageStudioEnabled)
 }
 
 func (s *settingPublicRepoStub) Delete(ctx context.Context, key string) error {

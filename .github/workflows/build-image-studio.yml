@@ -1,0 +1,70 @@
+name: Build Image Studio Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-image-studio-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and push linux/amd64 image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare image metadata
+        id: vars
+        shell: bash
+        run: |
+          echo "short_sha=${GITHUB_SHA::9}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          pull: true
+          tags: |
+            ${{ steps.vars.outputs.image }}:v0.1.168-image-studio-${{ steps.vars.outputs.short_sha }}
+            ${{ steps.vars.outputs.image }}:feature-image-studio
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=0.1.168-image-studio.${{ steps.vars.outputs.short_sha }}
+          build-args: |
+            VERSION=0.1.168-image-studio.${{ steps.vars.outputs.short_sha }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          {
+            echo "## Image published"
+            echo
+            echo "\`${{ steps.vars.outputs.image }}:v0.1.168-image-studio-${{ steps.vars.outputs.short_sha }}\`"
+            echo
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

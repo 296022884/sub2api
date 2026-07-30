@@ -30,6 +30,12 @@ export default {
           enabled: '启用可用渠道',
           enabledHint: '关闭后用户端侧边栏入口隐藏，接口返回空数组。',
         },
+        imageStudio: {
+          title: 'AI 生图',
+          description: '允许持有符合条件的 OpenAI API 密钥的用户进入 AI 生图工作区。默认关闭。',
+          enabled: '启用 AI 生图',
+          enabledHint: '关闭后隐藏导航入口，直接访问工作区时会跳转到仪表盘。',
+        },
         modelPlaza: {
           title: '模型广场',
           description: '以分组为单位向访客展示可用模型与价格的公开页面。默认关闭。',
