@@ -95,7 +95,13 @@
 
         <!-- Iframe embed mode -->
         <div v-else class="custom-embed-shell">
+          <div v-if="isNovaUrl && (ssoLoading || !embeddedUrl)" class="flex h-full items-center justify-center p-10 text-center">
+            <div class="text-sm text-gray-500 dark:text-dark-400">
+              {{ ssoLoading ? '正在验证 Nova 登录状态...' : 'Nova 登录授权失败，请刷新页面重试' }}
+            </div>
+          </div>
           <a
+            v-else
             :href="embeddedUrl"
             target="_blank"
             rel="noopener noreferrer"
@@ -105,6 +111,7 @@
             {{ t('customPage.openInNewTab') }}
           </a>
           <iframe
+            v-if="!isNovaUrl || !!embeddedUrl"
             :src="embeddedUrl"
             class="custom-embed-frame"
             allowfullscreen
@@ -124,7 +131,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { buildApiUrl } from '@/api/client'
+import { apiClient, buildApiUrl } from '@/api/client'
 import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -148,6 +155,8 @@ const markdownContainer = ref<HTMLElement | null>(null)
 const tocItems = ref<TocItem[]>([])
 const tocVisible = ref(typeof window !== 'undefined' ? window.innerWidth > 768 : true)
 const activeHeadingId = ref('')
+const resolvedEmbeddedUrl = ref('')
+const ssoLoading = ref(false)
 let themeObserver: MutationObserver | null = null
 
 const menuItemId = computed(() => route.params.id as string)
@@ -173,8 +182,19 @@ const markdownSlug = computed(() => {
 
 const isMarkdownMode = computed(() => !!markdownSlug.value)
 
+const isNovaUrl = computed(() => {
+  const raw = menuItem.value?.url || ''
+  try {
+    return new URL(raw).hostname.toLowerCase() === 'nova.aimountain.top'
+  } catch {
+    return false
+  }
+})
+
 const embeddedUrl = computed(() => {
   if (!menuItem.value || isMarkdownMode.value) return ''
+  if (isNovaUrl.value && !resolvedEmbeddedUrl.value) return ''
+  if (resolvedEmbeddedUrl.value) return resolvedEmbeddedUrl.value
   return buildEmbeddedUrl(
     menuItem.value.url,
     authStore.user?.id,
@@ -183,6 +203,31 @@ const embeddedUrl = computed(() => {
     locale.value,
   )
 })
+
+async function resolveEmbeddedUrl() {
+  resolvedEmbeddedUrl.value = ''
+  if (!menuItem.value || isMarkdownMode.value) return
+  if (!isNovaUrl.value) {
+    resolvedEmbeddedUrl.value = buildEmbeddedUrl(
+      menuItem.value.url,
+      authStore.user?.id,
+      authStore.token,
+      pageTheme.value,
+      locale.value,
+    )
+    return
+  }
+
+  ssoLoading.value = true
+  try {
+    const { data } = await apiClient.post<{ redirect_url: string }>('/nova/sso')
+    resolvedEmbeddedUrl.value = buildEmbeddedUrl(data.redirect_url, undefined, null, pageTheme.value, locale.value)
+  } catch {
+    resolvedEmbeddedUrl.value = ''
+  } finally {
+    ssoLoading.value = false
+  }
+}
 
 const isValidUrl = computed(() => {
   if (isMarkdownMode.value) return false
@@ -341,6 +386,10 @@ watch(markdownSlug, (slug) => {
     renderedHtml.value = ''
     tocItems.value = []
   }
+}, { immediate: true })
+
+watch([menuItem, () => authStore.token, pageTheme, locale], () => {
+  void resolveEmbeddedUrl()
 }, { immediate: true })
 
 onMounted(async () => {

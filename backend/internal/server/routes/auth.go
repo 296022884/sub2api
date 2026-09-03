@@ -259,4 +259,10 @@ func RegisterAuthRoutes(
 		authenticated.POST("/auth/revoke-all-sessions", h.Auth.RevokeAllSessions)
 		authenticated.POST("/auth/oauth/bind-token", h.Auth.PrepareOAuthBindAccessTokenCookie)
 	}
+
+	// Internal callback used by the Nova auth proxy. It is protected by a
+	// separate shared secret inside the proxy handler, not by a user JWT.
+	v1.POST("/nova/sso/exchange", rateLimiter.LimitWithOptions("nova-sso-exchange", 60, time.Minute, middleware.RateLimitOptions{
+		FailureMode: middleware.RateLimitFailClose,
+	}), h.Auth.ExchangeNovaSSOTicket)
 }

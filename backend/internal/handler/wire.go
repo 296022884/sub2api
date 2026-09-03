@@ -198,6 +198,7 @@ func ProvideHandlers(
 	_ *service.IdempotencyCleanupService,
 	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
+	authHandler.SetAPIKeyService(apiKeyHandler.Service())
 	return &Handlers{
 		Auth:             authHandler,
 		User:             userHandler,

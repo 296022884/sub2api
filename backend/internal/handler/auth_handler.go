@@ -2,14 +2,21 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"log/slog"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -27,9 +34,18 @@ type AuthHandler struct {
 	redeemService        *service.RedeemService
 	totpService          *service.TotpService
 	userAttributeService *service.UserAttributeService
+	apiKeyService        *service.APIKeyService
+
+	novaSSOTicketsMu sync.Mutex
+	novaSSOTickets   map[string]novaSSOTicket
 
 	dingTalkClientInstance *DingTalkClient
 	dingTalkClientMu       sync.Mutex
+}
+
+type novaSSOTicket struct {
+	UserID    int64
+	ExpiresAt time.Time
 }
 
 // NewAuthHandler creates a new AuthHandler
@@ -43,6 +59,15 @@ func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userSe
 		redeemService:        redeemService,
 		totpService:          totpService,
 		userAttributeService: userAttributeService,
+		novaSSOTickets:       make(map[string]novaSSOTicket),
+	}
+}
+
+// SetAPIKeyService wires the API key lookup used by the Nova SSO exchange.
+// It is kept as a setter so existing handler constructors and tests remain compatible.
+func (h *AuthHandler) SetAPIKeyService(apiKeyService *service.APIKeyService) {
+	if h != nil {
+		h.apiKeyService = apiKeyService
 	}
 }
 
@@ -417,6 +442,118 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 	}
 
 	h.respondWithTokenPair(c, user)
+}
+
+const novaSSOTicketTTL = time.Minute
+
+// CreateNovaSSOSession issues a short-lived, one-time ticket for the Nova
+// auth proxy. The browser never receives the user's Sub2API JWT or API key in
+// the redirect URL.
+// POST /api/v1/nova/sso
+func (h *AuthHandler) CreateNovaSSOSession(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("NOVA_SSO_PUBLIC_URL")), "/")
+	parsed, err := url.Parse(publicURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("NOVA_SSO_NOT_CONFIGURED", "Nova SSO is not configured"))
+		return
+	}
+
+	ticketBytes := make([]byte, 32)
+	if _, err := rand.Read(ticketBytes); err != nil {
+		response.ErrorFrom(c, infraerrors.InternalServer("NOVA_SSO_TICKET_FAILED", "failed to create Nova SSO ticket").WithCause(err))
+		return
+	}
+	ticket := hex.EncodeToString(ticketBytes)
+	expiresAt := time.Now().Add(novaSSOTicketTTL)
+	h.novaSSOTicketsMu.Lock()
+	for value, stored := range h.novaSSOTickets {
+		if time.Now().After(stored.ExpiresAt) {
+			delete(h.novaSSOTickets, value)
+		}
+	}
+	h.novaSSOTickets[ticket] = novaSSOTicket{UserID: subject.UserID, ExpiresAt: expiresAt}
+	h.novaSSOTicketsMu.Unlock()
+
+	query := parsed.Query()
+	query.Set("sso_ticket", ticket)
+	parsed.RawQuery = query.Encode()
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, gin.H{"redirect_url": parsed.String(), "expires_in": int(novaSSOTicketTTL.Seconds())})
+}
+
+// ExchangeNovaSSOTicket is called only by the private Nova auth proxy. It
+// atomically consumes a ticket and returns the selected user's API key to the
+// proxy, never to the browser.
+// POST /api/v1/nova/sso/exchange
+func (h *AuthHandler) ExchangeNovaSSOTicket(c *gin.Context) {
+	expectedSecret := strings.TrimSpace(os.Getenv("NOVA_SSO_PROXY_SECRET"))
+	providedSecret := c.GetHeader("X-Nova-Proxy-Secret")
+	if expectedSecret == "" || subtle.ConstantTimeCompare([]byte(expectedSecret), []byte(providedSecret)) != 1 {
+		response.Unauthorized(c, "Nova SSO proxy authentication failed")
+		return
+	}
+	ticket := strings.TrimSpace(c.Query("ticket"))
+	if ticket == "" || len(ticket) > 128 {
+		response.BadRequest(c, "Invalid Nova SSO ticket")
+		return
+	}
+	h.novaSSOTicketsMu.Lock()
+	stored, found := h.novaSSOTickets[ticket]
+	if found {
+		delete(h.novaSSOTickets, ticket)
+	}
+	h.novaSSOTicketsMu.Unlock()
+	if !found || time.Now().After(stored.ExpiresAt) {
+		response.Unauthorized(c, "Nova SSO ticket is invalid or expired")
+		return
+	}
+	if h.userService == nil || h.apiKeyService == nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("NOVA_SSO_UNAVAILABLE", "Nova SSO is temporarily unavailable"))
+		return
+	}
+	user, err := h.userService.GetByID(c.Request.Context(), stored.UserID)
+	if err != nil || user == nil || !user.IsActive() {
+		response.Unauthorized(c, "User account is not active")
+		return
+	}
+	keys, _, err := h.apiKeyService.List(c.Request.Context(), stored.UserID, pagination.PaginationParams{Page: 1, PageSize: 100}, service.APIKeyListFilters{Status: service.StatusAPIKeyActive})
+	if err != nil {
+		response.ErrorFrom(c, infraerrors.ServiceUnavailable("NOVA_SSO_KEY_LOOKUP_FAILED", "failed to load the user's API keys").WithCause(err))
+		return
+	}
+	var selected *service.APIKey
+	for i := range keys {
+		key := &keys[i]
+		if key.Key == "" || key.IsExpired() || key.IsQuotaExhausted() {
+			continue
+		}
+		if key.Group != nil {
+			if key.Group.Platform != "" && key.Group.Platform != service.PlatformOpenAI {
+				continue
+			}
+			if !service.GroupAllowsImageGeneration(key.Group) {
+				continue
+			}
+		}
+		selected = key
+		break
+	}
+	if selected == nil {
+		response.ErrorFrom(c, infraerrors.Forbidden("NOVA_SSO_API_KEY_REQUIRED", "请先创建一个允许图片生成的 Sub2API API Key"))
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, gin.H{
+		"user_id":    stored.UserID,
+		"api_key":    selected.Key,
+		"api_key_id": selected.ID,
+		"expires_in": 300,
+	})
 }
 
 // GetCurrentUser handles getting current authenticated user

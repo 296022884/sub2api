@@ -30,6 +30,15 @@ func NewAPIKeyHandler(apiKeyService *service.APIKeyService) *APIKeyHandler {
 	}
 }
 
+// Service exposes the wired API key service to sibling handlers that need a
+// user-scoped credential lookup (for example, Nova SSO).
+func (h *APIKeyHandler) Service() *service.APIKeyService {
+	if h == nil {
+		return nil
+	}
+	return h.apiKeyService
+}
+
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
 	Name          string   `json:"name" binding:"required"`

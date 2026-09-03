@@ -72,6 +72,13 @@ func RegisterUserRoutes(
 			}
 		}
 
+		// Nova Image Studio SSO. The handler issues a one-time ticket; the
+		// browser never forwards its Sub2API JWT to the Nova origin.
+		nova := authenticated.Group("/nova")
+		{
+			nova.POST("/sso", h.Auth.CreateNovaSSOSession)
+		}
+
 		// API Key管理
 		keys := authenticated.Group("/keys")
 		{
