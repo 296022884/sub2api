@@ -82,39 +82,45 @@ func TestSettingHandler_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t 
 	require.True(t, resp.Data.ForceEmailOnThirdPartySignup)
 }
 
-func TestSettingHandler_GetPublicSettings_ExposesTencentCaptchaConfiguration(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	repo := &settingHandlerPublicRepoStub{
-		values: map[string]string{
-			service.SettingKeyTencentCaptchaEnabled: "true",
-			service.SettingKeyTencentCaptchaAppID:   "123456789",
-			service.SettingKeyTencentCaptchaRegion:  service.TencentCaptchaRegionINTL,
-		},
+func TestSettingHandler_GetPublicSettings_ImageStudioIsStrictlyOptIn(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		include bool
+		want    bool
+	}{
+		{name: "enabled", value: "true", include: true, want: true},
+		{name: "disabled", value: "false", include: true, want: false},
+		{name: "malformed", value: "TRUE", include: true, want: false},
+		{name: "missing", want: false},
 	}
-	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
 
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/public", nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			values := map[string]string{}
+			if tt.include {
+				values[service.SettingKeyImageStudioEnabled] = tt.value
+			}
+			h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
+				values: values,
+			}, &config.Config{}), "test-version")
 
-	h.GetPublicSettings(c)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/settings/public", nil)
+			h.GetPublicSettings(c)
 
-	require.Equal(t, http.StatusOK, recorder.Code)
-
-	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			TencentCaptchaEnabled bool   `json:"tencent_captcha_enabled"`
-			TencentCaptchaAppID   string `json:"tencent_captcha_app_id"`
-			TencentCaptchaRegion  string `json:"tencent_captcha_region"`
-		} `json:"data"`
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var resp struct {
+				Data struct {
+					ImageStudioEnabled bool `json:"image_studio_enabled"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+			require.Equal(t, tt.want, resp.Data.ImageStudioEnabled)
+		})
 	}
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
-	require.Equal(t, 0, resp.Code)
-	require.True(t, resp.Data.TencentCaptchaEnabled)
-	require.Equal(t, "123456789", resp.Data.TencentCaptchaAppID)
-	require.Equal(t, service.TencentCaptchaRegionINTL, resp.Data.TencentCaptchaRegion)
 }
 
 func TestSettingHandler_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {

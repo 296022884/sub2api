@@ -8,6 +8,7 @@ type NavigationGuard = (
 
 const routerHarness = vi.hoisted(() => ({
   guard: null as NavigationGuard | null,
+  routes: [] as Array<Record<string, any>>,
 }))
 
 const authStore = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const authStore = vi.hoisted(() => ({
   isAdmin: false,
   isSimpleMode: false,
   hasPendingAuthSession: false,
+  user: { id: 1 },
 }))
 
 const appStore = vi.hoisted(() => ({
@@ -25,20 +27,30 @@ const appStore = vi.hoisted(() => ({
   cachedPublicSettings: null as null | {
     payment_enabled?: boolean
     risk_control_enabled?: boolean
+    image_studio_enabled?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
 }))
 
+const keysAPI = vi.hoisted(() => ({
+  list: vi.fn(),
+}))
+
+vi.mock('@/api/keys', () => ({ keysAPI }))
+
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(() => ({})),
-  createRouter: vi.fn(() => ({
+  createRouter: vi.fn((options: { routes: Array<Record<string, any>> }) => {
+    routerHarness.routes = options.routes
+    return ({
     beforeEach: vi.fn((guard: NavigationGuard) => {
       routerHarness.guard = guard
     }),
     afterEach: vi.fn(),
     onError: vi.fn(),
-  })),
+    })
+  }),
 }))
 
 vi.mock('@/stores/auth', () => ({
@@ -117,6 +129,85 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+    keysAPI.list.mockReset()
+  })
+
+  it('preserves the existing Batch Image Generation route and alias', () => {
+    const batchRoute = routerHarness.routes.find((route) => route.path === '/batch-image')
+    expect(batchRoute).toMatchObject({
+      name: 'BatchImageGuide',
+      alias: '/docs/batch-image',
+    })
+  })
+
+  it('admits Image Studio only when enabled and an eligible OpenAI key exists', async () => {
+    appStore.cachedPublicSettings = { image_studio_enabled: true }
+    appStore.publicSettingsLoaded = true
+    appStore.fetchPublicSettings.mockResolvedValue({ image_studio_enabled: true })
+    keysAPI.list.mockResolvedValue({
+      items: [{ status: 'active', group: { status: 'active', platform: 'openai', allow_image_generation: true } }],
+      pages: 1,
+    })
+
+    const { navigation, next } = runGuard({ requiresImageStudio: true }, '/image-studio')
+    await navigation
+
+    expect(keysAPI.list).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it.each([
+    ['unloaded settings', null, false],
+    ['disabled settings', { image_studio_enabled: false }, true],
+  ])('redirects Image Studio to the dashboard for %s', async (_name, settings, loaded) => {
+    appStore.cachedPublicSettings = settings
+    appStore.publicSettingsLoaded = loaded
+    appStore.fetchPublicSettings.mockResolvedValue(null)
+
+    const { navigation, next } = runGuard({ requiresImageStudio: true }, '/image-studio')
+    await navigation
+
+    expect(keysAPI.list).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('redirects Image Studio users without an eligible key to key management', async () => {
+    appStore.cachedPublicSettings = { image_studio_enabled: true }
+    appStore.publicSettingsLoaded = true
+    appStore.fetchPublicSettings.mockResolvedValue({ image_studio_enabled: true })
+    keysAPI.list.mockResolvedValue({
+      items: [
+        { status: 'inactive', group: { platform: 'openai', allow_image_generation: true } },
+        { status: 'active', group: { platform: 'gemini', allow_image_generation: true } },
+        { status: 'active', group: { platform: 'openai', allow_image_generation: false } },
+        { status: 'active', group: { status: 'inactive', platform: 'openai', allow_image_generation: true } },
+      ],
+      pages: 1,
+    })
+
+    const { navigation, next } = runGuard({ requiresImageStudio: true }, '/image-studio')
+    await navigation
+
+    expect(next).toHaveBeenCalledWith({
+      path: '/keys',
+      query: { notice: 'image-studio-key-required' },
+    })
+  })
+
+  it('rejects Image Studio when a fresh settings response disables it', async () => {
+    appStore.cachedPublicSettings = { image_studio_enabled: true }
+    appStore.publicSettingsLoaded = true
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      appStore.cachedPublicSettings = { image_studio_enabled: false }
+      return appStore.cachedPublicSettings
+    })
+
+    const { navigation, next } = runGuard({ requiresImageStudio: true }, '/image-studio')
+    await navigation
+
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledWith(true)
+    expect(keysAPI.list).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith('/dashboard')
   })
 
   it('waits for the first public-settings request before deciding payment access', async () => {

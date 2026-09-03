@@ -3,6 +3,13 @@
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-col gap-3">
+          <div
+            v-if="showImageStudioKeyNotice"
+            role="alert"
+            class="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+          >
+            {{ t('imageStudio.keyRequired') }}
+          </div>
           <div class="flex flex-wrap items-center gap-3">
             <SearchInput
               v-model="filterSearch"
@@ -1125,6 +1132,7 @@
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
 const { t } = useI18n()
+const showImageStudioKeyNotice = new URLSearchParams(window.location.search).get('notice') === 'image-studio-key-required'
 import { keysAPI, authAPI, usageAPI, userGroupsAPI } from '@/api'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'

@@ -25,6 +25,7 @@ This directory contains the Vue Router configuration for the Sub2API frontend ap
 | `/`          | -             | Redirects to `/dashboard`    |
 | `/dashboard` | DashboardView | User dashboard with stats    |
 | `/keys`      | KeysView      | API key management           |
+| `/image-studio` | ImageStudioView | Flag- and eligible-key-gated Image Studio |
 | `/usage`     | UsageView     | Usage records and statistics |
 | `/redeem`    | RedeemView    | Redeem code interface        |
 | `/profile`   | ProfileView   | User profile settings        |
@@ -63,7 +64,11 @@ The router implements a comprehensive navigation guard that:
 4. **Role-Based Access Control**:
    - Admin routes (`requiresAdmin: true`) require admin role
    - Non-admin users are redirected to `/dashboard`
-5. **Preserves Intended Destination**:
+5. **Image Studio Access Control**:
+   - Image Studio routes (`requiresImageStudio: true`) require the public feature flag
+   - An eligible OpenAI API key is required; otherwise users are redirected to API key management
+   - Missing or failed settings fail closed and redirect to `/dashboard`
+6. **Preserves Intended Destination**:
    - Saves original URL in query parameter for post-login redirect
 
 ### Flow Diagram
@@ -83,7 +88,10 @@ Is user authenticated? ──No──→ Redirect to /login with redirect query
 Requires admin role? ──Yes──→ Is user admin? ──No──→ Redirect to /dashboard
         ↓ No                                  ↓ Yes
         ↓                                     ↓
-Allow access ←────────────────────────────────┘
+Requires Image Studio? ──Yes──→ Flag enabled and eligible key? ──No──→ Redirect
+        ↓ No                                      ↓ Yes
+        ↓                                         ↓
+Allow access ←────────────────────────────────────┘
 ```
 
 ## Route Meta Fields
@@ -94,6 +102,7 @@ Each route can define the following meta fields:
 interface RouteMeta {
   requiresAuth?: boolean // Default: true (requires authentication)
   requiresAdmin?: boolean // Default: false (admin access only)
+  requiresImageStudio?: boolean // Default: false (flag and eligible key required)
   title?: string // Page title
   breadcrumbs?: Array<{
     // Breadcrumb navigation
