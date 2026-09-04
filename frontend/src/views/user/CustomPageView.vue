@@ -95,13 +95,7 @@
 
         <!-- Iframe embed mode -->
         <div v-else class="custom-embed-shell">
-          <div v-if="isNovaUrl && (ssoLoading || !embeddedUrl)" class="flex h-full items-center justify-center p-10 text-center">
-            <div class="text-sm text-gray-500 dark:text-dark-400">
-              {{ ssoLoading ? '正在验证 Nova 登录状态...' : 'Nova 登录授权失败，请刷新页面重试' }}
-            </div>
-          </div>
           <a
-            v-else
             :href="embeddedUrl"
             target="_blank"
             rel="noopener noreferrer"
@@ -111,7 +105,6 @@
             {{ t('customPage.openInNewTab') }}
           </a>
           <iframe
-            v-if="!isNovaUrl || !!embeddedUrl"
             :src="embeddedUrl"
             class="custom-embed-frame"
             allowfullscreen
@@ -131,7 +124,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { apiClient, buildApiUrl } from '@/api/client'
+import { buildApiUrl } from '@/api/client'
 import { buildEmbeddedUrl, detectTheme } from '@/utils/embedded-url'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -156,7 +149,6 @@ const tocItems = ref<TocItem[]>([])
 const tocVisible = ref(typeof window !== 'undefined' ? window.innerWidth > 768 : true)
 const activeHeadingId = ref('')
 const resolvedEmbeddedUrl = ref('')
-const ssoLoading = ref(false)
 let themeObserver: MutationObserver | null = null
 
 const menuItemId = computed(() => route.params.id as string)
@@ -193,8 +185,12 @@ const isNovaUrl = computed(() => {
 
 const embeddedUrl = computed(() => {
   if (!menuItem.value || isMarkdownMode.value) return ''
-  if (isNovaUrl.value && !resolvedEmbeddedUrl.value) return ''
   if (resolvedEmbeddedUrl.value) return resolvedEmbeddedUrl.value
+  // Nova is a public image workspace. Do not append the Sub2API JWT to the
+  // cross-origin URL; users enter their own Sub2API API key in Nova settings.
+  if (isNovaUrl.value) {
+    return buildEmbeddedUrl(menuItem.value.url, undefined, null, pageTheme.value, locale.value)
+  }
   return buildEmbeddedUrl(
     menuItem.value.url,
     authStore.user?.id,
@@ -204,29 +200,16 @@ const embeddedUrl = computed(() => {
   )
 })
 
-async function resolveEmbeddedUrl() {
+function resolveEmbeddedUrl() {
   resolvedEmbeddedUrl.value = ''
   if (!menuItem.value || isMarkdownMode.value) return
-  if (!isNovaUrl.value) {
-    resolvedEmbeddedUrl.value = buildEmbeddedUrl(
-      menuItem.value.url,
-      authStore.user?.id,
-      authStore.token,
-      pageTheme.value,
-      locale.value,
-    )
-    return
-  }
-
-  ssoLoading.value = true
-  try {
-    const { data } = await apiClient.post<{ redirect_url: string }>('/nova/sso')
-    resolvedEmbeddedUrl.value = buildEmbeddedUrl(data.redirect_url, undefined, null, pageTheme.value, locale.value)
-  } catch {
-    resolvedEmbeddedUrl.value = ''
-  } finally {
-    ssoLoading.value = false
-  }
+  resolvedEmbeddedUrl.value = buildEmbeddedUrl(
+    menuItem.value.url,
+    isNovaUrl.value ? undefined : authStore.user?.id,
+    isNovaUrl.value ? null : authStore.token,
+    pageTheme.value,
+    locale.value,
+  )
 }
 
 const isValidUrl = computed(() => {
